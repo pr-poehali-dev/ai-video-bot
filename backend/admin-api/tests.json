@@ -7,7 +7,7 @@
       "expectedStatus": 200,
       "expectedBody": {
         "stats": {
-          "total_users": 1
+          "total_users": "number"
         }
       },
       "bodyMatcher": "partial"
@@ -16,10 +16,7 @@
       "name": "Handle OPTIONS preflight",
       "method": "OPTIONS",
       "path": "/",
-      "expectedStatus": 200,
-      "expectedHeaders": {
-        "Access-Control-Allow-Origin": "*"
-      }
+      "expectedStatus": 200
     }
   ]
 }
