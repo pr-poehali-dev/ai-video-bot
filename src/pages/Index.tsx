@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import Icon from '@/components/ui/icon';
 
 const API_BASE = 'https://functions.poehali.dev/3163a024-78e4-404e-a9ae-b215ace0c6b2';
-const ADMIN_KEY = 'your_admin_key_here';
+const ADMIN_KEY = import.meta.env.VITE_ADMIN_SECRET_KEY || '';
 
 interface DashboardData {
   stats: {
@@ -66,13 +66,24 @@ export default function Index() {
     fetch(`${API_BASE}?endpoint=dashboard`, {
       headers: { 'X-Admin-Key': ADMIN_KEY }
     })
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        return res.json();
+      })
       .then(data => {
-        setData(data);
+        if (data && data.stats) {
+          setData(data);
+        } else {
+          console.error('Invalid data format:', data);
+          setData(null);
+        }
         setLoading(false);
       })
       .catch(err => {
         console.error('Failed to load dashboard:', err);
+        setData(null);
         setLoading(false);
       });
   };
@@ -131,7 +142,7 @@ export default function Index() {
     );
   }
 
-  if (!data) {
+  if (!data || !data.stats) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-orange-50 flex items-center justify-center">
         <Card className="w-full max-w-md">
@@ -141,8 +152,19 @@ export default function Index() {
               Ошибка загрузки
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             <p className="text-muted-foreground">Не удалось загрузить данные панели администратора.</p>
+            {!ADMIN_KEY && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                <p className="text-sm text-yellow-800">
+                  ⚠️ Не установлен секретный ключ ADMIN_SECRET_KEY
+                </p>
+              </div>
+            )}
+            <Button onClick={loadDashboard} className="w-full">
+              <Icon name="RefreshCw" size={16} className="mr-2" />
+              Попробовать снова
+            </Button>
           </CardContent>
         </Card>
       </div>
