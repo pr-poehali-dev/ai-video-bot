@@ -110,14 +110,14 @@ def get_or_create_user(conn, user_id: int, username: str, first_name: str) -> Di
         if not user:
             cur.execute("""
                 INSERT INTO t_p62125649_ai_video_bot.users (user_id, username, first_name, balance)
-                VALUES (%s, %s, %s, 800)
+                VALUES (%s, %s, %s, 500)
                 RETURNING *
             """, (user_id, username, first_name))
             user = cur.fetchone()
             
             cur.execute("""
                 INSERT INTO t_p62125649_ai_video_bot.transactions (user_id, amount, type, description)
-                VALUES (%s, 800, 'welcome_bonus', 'Приветственный бонус')
+                VALUES (%s, 500, 'welcome_bonus', 'Приветственный бонус')
             """, (user_id,))
             
             conn.commit()
@@ -141,7 +141,7 @@ def handle_start_command(conn, chat_id: int, user_id: int, username: str, first_
         return
     
     if user_info['is_new']:
-        text = "🎉 Добро пожаловать в AI Video Studio!\n\nВам начислено 800 кредитов. Хватит, чтобы сделать превью или видео.\n\n💡 1 кредит = 1 рубль"
+        text = "🎉 Добро пожаловать в AI Video Studio!\n\nВам начислено 500 кредитов. Хватит, чтобы сделать превью или видео.\n\n💡 1 кредит = 1 рубль"
     else:
         text = f"👋 С возвращением, {first_name}!\n💰 Баланс: {user['balance']} кредитов"
     

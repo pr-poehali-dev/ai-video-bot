@@ -91,6 +91,37 @@ def get_daily_revenue(conn, days: int = 7):
         """, (days,))
         return [dict(r) for r in cur.fetchall()]
 
+def update_user_balance(conn, user_id: int, amount: int, admin_username: str, reason: str) -> Dict[str, Any]:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT balance FROM t_p62125649_ai_video_bot.users WHERE user_id = %s", (user_id,))
+        user = cur.fetchone()
+        
+        if not user:
+            return {'success': False, 'error': 'User not found'}
+        
+        old_balance = user['balance']
+        new_balance = old_balance + amount
+        
+        cur.execute("""
+            UPDATE t_p62125649_ai_video_bot.users 
+            SET balance = %s 
+            WHERE user_id = %s
+        """, (new_balance, user_id))
+        
+        cur.execute("""
+            INSERT INTO t_p62125649_ai_video_bot.transactions (user_id, amount, type, description)
+            VALUES (%s, %s, 'admin_adjustment', %s)
+        """, (user_id, amount, reason))
+        
+        cur.execute("""
+            INSERT INTO t_p62125649_ai_video_bot.admin_actions (admin_username, action_type, target_user_id, details)
+            VALUES (%s, 'balance_change', %s, %s)
+        """, (admin_username, user_id, json.dumps({'old_balance': old_balance, 'new_balance': new_balance, 'amount': amount, 'reason': reason})))
+        
+        conn.commit()
+        
+        return {'success': True, 'old_balance': old_balance, 'new_balance': new_balance}
+
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     method = event.get('httpMethod', 'GET')
     
@@ -122,22 +153,40 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         params = event.get('queryStringParameters', {})
         endpoint = params.get('endpoint', 'dashboard')
         
-        if endpoint == 'dashboard':
-            stats = get_dashboard_stats(conn)
-            recent_users = get_recent_users(conn, 10)
-            recent_orders = get_recent_orders(conn, 20)
-            order_stats = get_order_stats(conn)
-            daily_revenue = get_daily_revenue(conn, 7)
+        if method == 'GET':
+            if endpoint == 'dashboard':
+                stats = get_dashboard_stats(conn)
+                recent_users = get_recent_users(conn, 10)
+                recent_orders = get_recent_orders(conn, 20)
+                order_stats = get_order_stats(conn)
+                daily_revenue = get_daily_revenue(conn, 7)
+                
+                data = {
+                    'stats': stats,
+                    'recent_users': recent_users,
+                    'recent_orders': recent_orders,
+                    'order_stats': order_stats,
+                    'daily_revenue': daily_revenue
+                }
+            else:
+                data = {'error': 'Unknown endpoint'}
+        
+        elif method == 'POST':
+            body_data = json.loads(event.get('body', '{}'))
+            action = body_data.get('action')
             
-            data = {
-                'stats': stats,
-                'recent_users': recent_users,
-                'recent_orders': recent_orders,
-                'order_stats': order_stats,
-                'daily_revenue': daily_revenue
-            }
+            if action == 'update_balance':
+                user_id = body_data.get('user_id')
+                amount = body_data.get('amount')
+                admin_username = body_data.get('admin_username', 'admin')
+                reason = body_data.get('reason', 'Manual adjustment')
+                
+                result = update_user_balance(conn, user_id, amount, admin_username, reason)
+                data = result
+            else:
+                data = {'error': 'Unknown action'}
         else:
-            data = {'error': 'Unknown endpoint'}
+            data = {'error': 'Method not allowed'}
         
         conn.close()
         

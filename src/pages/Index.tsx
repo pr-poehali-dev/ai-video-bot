@@ -3,9 +3,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
 import Icon from '@/components/ui/icon';
 
 const API_BASE = 'https://functions.poehali.dev/3163a024-78e4-404e-a9ae-b215ace0c6b2';
+const ADMIN_KEY = 'your_admin_key_here';
 
 interface DashboardData {
   stats: {
@@ -50,9 +55,17 @@ interface DashboardData {
 export default function Index() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [balanceDialogOpen, setBalanceDialogOpen] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<number | null>(null);
+  const [balanceAmount, setBalanceAmount] = useState('');
+  const [balanceReason, setBalanceReason] = useState('');
+  const [updating, setUpdating] = useState(false);
 
-  useEffect(() => {
-    fetch(`${API_BASE}?endpoint=dashboard`)
+  const loadDashboard = () => {
+    setLoading(true);
+    fetch(`${API_BASE}?endpoint=dashboard`, {
+      headers: { 'X-Admin-Key': ADMIN_KEY }
+    })
       .then(res => res.json())
       .then(data => {
         setData(data);
@@ -62,7 +75,50 @@ export default function Index() {
         console.error('Failed to load dashboard:', err);
         setLoading(false);
       });
+  };
+
+  useEffect(() => {
+    loadDashboard();
   }, []);
+
+  const handleUpdateBalance = async () => {
+    if (!selectedUser || !balanceAmount) return;
+
+    setUpdating(true);
+    try {
+      const response = await fetch(API_BASE, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Key': ADMIN_KEY
+        },
+        body: JSON.stringify({
+          action: 'update_balance',
+          user_id: selectedUser,
+          amount: parseInt(balanceAmount),
+          admin_username: 'admin',
+          reason: balanceReason || 'Корректировка баланса'
+        })
+      });
+
+      const result = await response.json();
+      
+      if (result.success) {
+        setBalanceDialogOpen(false);
+        setBalanceAmount('');
+        setBalanceReason('');
+        setSelectedUser(null);
+        loadDashboard();
+      } else {
+        alert('Ошибка: ' + (result.error || 'Не удалось обновить баланс'));
+      }
+    } catch (err) {
+      console.error('Failed to update balance:', err);
+      alert('Ошибка при обновлении баланса');
+    } finally {
+      setUpdating(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -301,6 +357,71 @@ export default function Index() {
                             Регистрация: {new Date(user.created_at).toLocaleDateString('ru')}
                           </p>
                         </div>
+                        <Dialog open={balanceDialogOpen && selectedUser === user.user_id} onOpenChange={(open) => {
+                          setBalanceDialogOpen(open);
+                          if (!open) {
+                            setSelectedUser(null);
+                            setBalanceAmount('');
+                            setBalanceReason('');
+                          }
+                        }}>
+                          <DialogTrigger asChild>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setSelectedUser(user.user_id);
+                                setBalanceDialogOpen(true);
+                              }}
+                            >
+                              <Icon name="Wallet" size={14} className="mr-1" />
+                              Изменить
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>Изменить баланс пользователя</DialogTitle>
+                              <DialogDescription>
+                                {user.first_name} (@{user.username || user.user_id})<br />
+                                Текущий баланс: {user.balance} кредитов
+                              </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4 py-4">
+                              <div className="space-y-2">
+                                <Label htmlFor="amount">Сумма изменения (может быть отрицательной)</Label>
+                                <Input
+                                  id="amount"
+                                  type="number"
+                                  placeholder="Например: 100 или -50"
+                                  value={balanceAmount}
+                                  onChange={(e) => setBalanceAmount(e.target.value)}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label htmlFor="reason">Причина изменения</Label>
+                                <Input
+                                  id="reason"
+                                  placeholder="Например: Компенсация за ошибку"
+                                  value={balanceReason}
+                                  onChange={(e) => setBalanceReason(e.target.value)}
+                                />
+                              </div>
+                              {balanceAmount && (
+                                <p className="text-sm text-muted-foreground">
+                                  Новый баланс: {user.balance + parseInt(balanceAmount || '0')} кредитов
+                                </p>
+                              )}
+                            </div>
+                            <DialogFooter>
+                              <Button variant="outline" onClick={() => setBalanceDialogOpen(false)}>
+                                Отмена
+                              </Button>
+                              <Button onClick={handleUpdateBalance} disabled={updating || !balanceAmount}>
+                                {updating ? 'Обновление...' : 'Применить'}
+                              </Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
                         {user.is_blocked && (
                           <Badge variant="destructive">Заблокирован</Badge>
                         )}

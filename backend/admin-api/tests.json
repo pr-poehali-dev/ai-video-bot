@@ -13,6 +13,23 @@
       "bodyMatcher": "partial"
     },
     {
+      "name": "Update user balance",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "action": "update_balance",
+        "user_id": 123456789,
+        "amount": 100,
+        "admin_username": "test_admin",
+        "reason": "Test adjustment"
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "success": true
+      },
+      "bodyMatcher": "partial"
+    },
+    {
       "name": "Handle OPTIONS preflight",
       "method": "OPTIONS",
       "path": "/",
