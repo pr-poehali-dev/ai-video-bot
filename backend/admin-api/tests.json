@@ -1,0 +1,24 @@
+{
+  "tests": [
+    {
+      "name": "Get dashboard stats",
+      "method": "GET",
+      "path": "/?endpoint=dashboard",
+      "expectedStatus": 200,
+      "expectedBody": {
+        "stats": {}
+      },
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Get users list",
+      "method": "GET",
+      "path": "/?endpoint=users&limit=10",
+      "expectedStatus": 200,
+      "expectedBody": {
+        "users": [{}]
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}

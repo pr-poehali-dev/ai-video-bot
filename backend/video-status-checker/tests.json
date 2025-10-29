@@ -1,0 +1,16 @@
+{
+  "tests": [
+
+    {
+      "name": "Check video status - GET request",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 200,
+      "expectedBody": {
+        "processed": 0,
+        "total_orders": 0
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}

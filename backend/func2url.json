@@ -1,0 +1,5 @@
+{
+  "telegram-webhook": "https://functions.poehali.dev/bb7d0a58-b8cf-4320-9a8e-000f952266d9",
+  "video-status-checker": "https://functions.poehali.dev/1655da17-3061-4871-9fbb-026dcf946587",
+  "admin-api": "https://functions.poehali.dev/3163a024-78e4-404e-a9ae-b215ace0c6b2"
+}

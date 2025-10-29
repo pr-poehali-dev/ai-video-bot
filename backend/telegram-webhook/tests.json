@@ -1,0 +1,17 @@
+{
+  "tests": [
+    {
+      "name": "Telegram webhook - health check",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "update_id": 1
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "ok": true
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
