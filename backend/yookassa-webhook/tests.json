@@ -1,0 +1,36 @@
+{
+  "tests": [
+    {
+      "name": "Handle payment succeeded webhook",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "event": "payment.succeeded",
+        "object": {
+          "id": "test_payment_12345",
+          "amount": {
+            "value": "500.00",
+            "currency": "RUB"
+          },
+          "metadata": {
+            "user_id": "123456789"
+          }
+        }
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "ok": true
+      },
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Handle OPTIONS preflight",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200,
+      "expectedHeaders": {
+        "Access-Control-Allow-Origin": "*"
+      }
+    }
+  ]
+}

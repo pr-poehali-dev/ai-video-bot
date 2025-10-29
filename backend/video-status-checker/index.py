@@ -1,236 +1,28 @@
 """
-Business: Background worker - checks video generation status and sends results
-Args: event (scheduled trigger); context with request_id
+Business: Background worker - checks video/image generation status and sends results to users
+Args: event (empty for cron), context with request_id
 Returns: HTTP response with processed orders count
 """
 
 import json
 import os
+from datetime import datetime, timedelta
 from typing import Dict, Any, List
 import psycopg2
-from psycopg2.extras import RealDictCursor
-from datetime import datetime, timedelta
+from psycopg2.extras import RealDictCursor, Json
 import urllib.request
-import urllib.parse
 
 DATABASE_URL = os.environ.get('DATABASE_URL')
-BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-VIDEO_API_URL = os.environ.get('VIDEO_API_URL', '')
-IMAGE_API_URL = os.environ.get('IMAGE_API_URL', '')
-STORYBOARD_API_URL = os.environ.get('STORYBOARD_API_URL', '')
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+IMAGE_API_URL = os.environ.get('IMAGE_API_URL', 'https://example.com/image')
+VIDEO_API_URL = os.environ.get('VIDEO_API_URL', 'https://example.com/video')
+STORYBOARD_API_URL = os.environ.get('STORYBOARD_API_URL', 'https://example.com/storyboard')
 
-def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
+TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-def send_telegram_message(chat_id: int, text: str, reply_markup: Dict = None):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {
-        'chat_id': chat_id,
-        'text': text,
-        'parse_mode': 'HTML'
-    }
-    if reply_markup:
-        data['reply_markup'] = json.dumps(reply_markup)
-    
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(data).encode('utf-8'),
-        headers={'Content-Type': 'application/json'}
-    )
-    
-    with urllib.request.urlopen(req) as response:
-        return json.loads(response.read().decode('utf-8'))
+MAX_RETRIES = 40
+TIMEOUT_HOURS = 2
 
-def send_telegram_photo(chat_id: int, photo_url: str, caption: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-    data = {
-        'chat_id': chat_id,
-        'photo': photo_url,
-        'caption': caption,
-        'parse_mode': 'HTML'
-    }
-    
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(data).encode('utf-8'),
-        headers={'Content-Type': 'application/json'}
-    )
-    
-    with urllib.request.urlopen(req) as response:
-        return json.loads(response.read().decode('utf-8'))
-
-def send_telegram_video(chat_id: int, video_url: str, caption: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendVideo"
-    data = {
-        'chat_id': chat_id,
-        'video': video_url,
-        'caption': caption,
-        'parse_mode': 'HTML'
-    }
-    
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(data).encode('utf-8'),
-        headers={'Content-Type': 'application/json'}
-    )
-    
-    with urllib.request.urlopen(req) as response:
-        return json.loads(response.read().decode('utf-8'))
-
-def check_api_status(api_url: str, task_id: str) -> Dict[str, Any]:
-    url = f"{api_url}/status/{task_id}"
-    
-    req = urllib.request.Request(url, headers={'Content-Type': 'application/json'})
-    
-    with urllib.request.urlopen(req) as response:
-        return json.loads(response.read().decode('utf-8'))
-
-def process_order(conn, order: Dict) -> bool:
-    order_id = order['order_id']
-    user_id = order['user_id']
-    task_id = order['task_id']
-    order_type = order['order_type']
-    
-    api_url = ''
-    if order_type == 'preview':
-        api_url = IMAGE_API_URL
-    elif order_type in ('text-to-video', 'image-to-video'):
-        api_url = VIDEO_API_URL
-    elif order_type == 'storyboard':
-        api_url = STORYBOARD_API_URL
-    
-    if not api_url:
-        return False
-    
-    status_response = check_api_status(api_url, task_id)
-    
-    if status_response.get('status') == 'completed':
-        result_url = status_response.get('result_url')
-        
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE orders 
-                SET status = 'completed', result_url = %s, completed_at = %s
-                WHERE order_id = %s
-            """, (result_url, datetime.now(), order_id))
-            conn.commit()
-        
-        if order_type == 'preview':
-            send_telegram_photo(
-                user_id, 
-                result_url,
-                "✅ Готово! Создаём видео?"
-            )
-        else:
-            send_telegram_video(
-                user_id,
-                result_url,
-                "✅ Ваше видео готово!"
-            )
-        
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE orders SET video_sent = true WHERE order_id = %s
-            """, (order_id,))
-            conn.commit()
-        
-        return True
-    
-    elif status_response.get('status') == 'failed':
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE orders 
-                SET status = 'failed', error_message = %s, completed_at = %s
-                WHERE order_id = %s
-            """, (status_response.get('error', 'Unknown error'), datetime.now(), order_id))
-            
-            cur.execute("SELECT balance FROM users WHERE user_id = %s", (user_id,))
-            user = cur.fetchone()
-            
-            if user:
-                new_balance = user[0] + order['cost']
-                cur.execute("UPDATE users SET balance = %s WHERE user_id = %s", (new_balance, user_id))
-                
-                cur.execute("""
-                    INSERT INTO transactions (user_id, amount, type, description, order_id, created_at)
-                    VALUES (%s, %s, 'refund', 'Автоматический возврат за неудачную генерацию', %s, %s)
-                """, (user_id, order['cost'], order_id, datetime.now()))
-            
-            conn.commit()
-        
-        send_telegram_message(
-            user_id,
-            f"⚠️ К сожалению, генерация не удалась.\n\n💰 Возвращено {order['cost']} кредитов на баланс."
-        )
-        
-        return True
-    
-    with conn.cursor() as cur:
-        cur.execute("""
-            UPDATE orders SET retry_count = retry_count + 1 WHERE order_id = %s
-        """, (order_id,))
-        conn.commit()
-    
-    if order['retry_count'] >= order['max_retries']:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE orders 
-                SET status = 'failed', error_message = 'Timeout - max retries exceeded', completed_at = %s
-                WHERE order_id = %s
-            """, (datetime.now(), order_id))
-            
-            cur.execute("SELECT balance FROM users WHERE user_id = %s", (user_id,))
-            user = cur.fetchone()
-            
-            if user:
-                new_balance = user[0] + order['cost']
-                cur.execute("UPDATE users SET balance = %s WHERE user_id = %s", (new_balance, user_id))
-                
-                cur.execute("""
-                    INSERT INTO transactions (user_id, amount, type, description, order_id, created_at)
-                    VALUES (%s, %s, 'refund', 'Автоматический возврат - таймаут генерации', %s, %s)
-                """, (user_id, order['cost'], order_id, datetime.now()))
-            
-            conn.commit()
-        
-        send_telegram_message(
-            user_id,
-            f"⚠️ Время ожидания истекло.\n\n💰 Возвращено {order['cost']} кредитов на баланс."
-        )
-        
-        return True
-    
-    timeout = datetime.now() - timedelta(hours=2)
-    if order['created_at'].replace(tzinfo=None) < timeout:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE orders 
-                SET status = 'failed', error_message = 'Timeout - 2 hours exceeded', completed_at = %s
-                WHERE order_id = %s
-            """, (datetime.now(), order_id))
-            
-            cur.execute("SELECT balance FROM users WHERE user_id = %s", (user_id,))
-            user = cur.fetchone()
-            
-            if user:
-                new_balance = user[0] + order['cost']
-                cur.execute("UPDATE users SET balance = %s WHERE user_id = %s", (new_balance, user_id))
-                
-                cur.execute("""
-                    INSERT INTO transactions (user_id, amount, type, description, order_id, created_at)
-                    VALUES (%s, %s, 'refund', 'Автоматический возврат - таймаут 2 часа', %s, %s)
-                """, (user_id, order['cost'], order_id, datetime.now()))
-            
-            conn.commit()
-        
-        send_telegram_message(
-            user_id,
-            f"⚠️ Генерация заняла слишком много времени.\n\n💰 Возвращено {order['cost']} кредитов на баланс."
-        )
-        
-        return True
-    
-    return False
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     method = event.get('httpMethod', 'GET')
@@ -244,39 +36,217 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 'Access-Control-Allow-Headers': 'Content-Type',
                 'Access-Control-Max-Age': '86400'
             },
+            'isBase64Encoded': False,
             'body': ''
         }
     
     try:
-        conn = get_db_connection()
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = True
         
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
-                SELECT * FROM orders 
-                WHERE status = 'processing' AND task_id IS NOT NULL
-                ORDER BY created_at ASC
-            """)
-            orders = cur.fetchall()
-        
-        processed_count = 0
-        for order in orders:
-            if process_order(conn, dict(order)):
-                processed_count += 1
+        processed = check_processing_orders(conn)
         
         conn.close()
         
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({
-                'processed': processed_count,
-                'total_orders': len(orders)
-            })
+            'isBase64Encoded': False,
+            'body': json.dumps({'processed': processed, 'timestamp': datetime.now().isoformat()})
         }
-    
+        
     except Exception as e:
         return {
             'statusCode': 500,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': {'Content-Type': 'application/json'},
+            'isBase64Encoded': False,
             'body': json.dumps({'error': str(e)})
         }
+
+
+def check_processing_orders(conn) -> int:
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cur.execute("""
+        SELECT * FROM orders 
+        WHERE status = 'processing' AND task_id IS NOT NULL
+        ORDER BY created_at ASC
+    """)
+    
+    orders = cur.fetchall()
+    processed_count = 0
+    
+    for order in orders:
+        order_id = order['order_id']
+        task_id = order['task_id']
+        order_type = order['order_type']
+        user_id = order['user_id']
+        created_at = order['created_at']
+        retry_count = order['retry_count']
+        
+        timeout = datetime.now() - timedelta(hours=TIMEOUT_HOURS)
+        if created_at < timeout:
+            handle_timeout(order_id, user_id, order['cost'], conn)
+            processed_count += 1
+            continue
+        
+        if retry_count >= MAX_RETRIES:
+            handle_max_retries(order_id, user_id, order['cost'], conn)
+            processed_count += 1
+            continue
+        
+        try:
+            status_url = get_status_url(order_type, task_id)
+            
+            req = urllib.request.Request(status_url, headers={'Content-Type': 'application/json'})
+            
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                
+                api_status = result.get('status')
+                
+                if api_status == 'completed':
+                    result_url = result.get('result_url') or result.get('url')
+                    
+                    if result_url:
+                        cur.execute("""
+                            UPDATE orders 
+                            SET status = 'completed', result_url = %s, completed_at = %s
+                            WHERE order_id = %s
+                        """, (result_url, datetime.now(), order_id))
+                        
+                        send_result_to_user(user_id, order_id, order_type, result_url)
+                        
+                        cur.execute("UPDATE orders SET video_sent = TRUE WHERE order_id = %s", (order_id,))
+                        
+                        processed_count += 1
+                
+                elif api_status == 'failed':
+                    error_msg = result.get('error', 'Генерация не удалась')
+                    
+                    cur.execute("""
+                        UPDATE orders 
+                        SET status = 'failed', error_message = %s
+                        WHERE order_id = %s
+                    """, (error_msg, order_id))
+                    
+                    refund_user(user_id, order['cost'], order_id, conn)
+                    send_message(user_id, f"❌ Заказ #{order_id} не удался\n\n{order['cost']} кредитов возвращены на ваш баланс")
+                    
+                    processed_count += 1
+                
+                else:
+                    cur.execute("""
+                        UPDATE orders 
+                        SET retry_count = retry_count + 1
+                        WHERE order_id = %s
+                    """, (order_id,))
+        
+        except Exception as e:
+            log_error(user_id, order_id, 'status_checker', 'api_error', str(e), {'task_id': task_id})
+            
+            cur.execute("""
+                UPDATE orders 
+                SET retry_count = retry_count + 1
+                WHERE order_id = %s
+            """, (order_id,))
+    
+    return processed_count
+
+
+def get_status_url(order_type: str, task_id: str) -> str:
+    if order_type == 'preview':
+        return f"{IMAGE_API_URL}/status/{task_id}"
+    elif order_type in ['text-to-video', 'image-to-video']:
+        return f"{VIDEO_API_URL}/status/{task_id}"
+    elif order_type == 'storyboard':
+        return f"{STORYBOARD_API_URL}/status/{task_id}"
+    else:
+        return f"{VIDEO_API_URL}/status/{task_id}"
+
+
+def handle_timeout(order_id: int, user_id: int, cost: int, conn) -> None:
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE orders 
+        SET status = 'failed', error_message = 'Превышено время ожидания (2 часа)'
+        WHERE order_id = %s
+    """, (order_id,))
+    
+    refund_user(user_id, cost, order_id, conn)
+    send_message(user_id, f"❌ Заказ #{order_id} отменён (таймаут)\n\n{cost} кредитов возвращены на ваш баланс")
+
+
+def handle_max_retries(order_id: int, user_id: int, cost: int, conn) -> None:
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE orders 
+        SET status = 'failed', error_message = 'Превышено максимальное количество попыток проверки'
+        WHERE order_id = %s
+    """, (order_id,))
+    
+    refund_user(user_id, cost, order_id, conn)
+    send_message(user_id, f"❌ Заказ #{order_id} отменён (макс. попыток)\n\n{cost} кредитов возвращены на ваш баланс")
+
+
+def refund_user(user_id: int, amount: int, order_id: int, conn) -> None:
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amount, user_id))
+    cur.execute("""
+        INSERT INTO transactions (user_id, amount, type, description, order_id)
+        VALUES (%s, %s, 'refund', 'Возврат за заказ #' || %s, %s)
+    """, (user_id, amount, order_id, order_id))
+
+
+def send_result_to_user(user_id: int, order_id: int, order_type: str, result_url: str) -> None:
+    if order_type == 'preview':
+        send_photo(user_id, result_url, f"✅ Превью готово! Заказ #{order_id}")
+    else:
+        send_video(user_id, result_url, f"✅ Видео готово! Заказ #{order_id}")
+
+
+def send_message(chat_id: int, text: str) -> None:
+    payload = {'chat_id': chat_id, 'text': text}
+    data = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(f"{TELEGRAM_API}/sendMessage", data=data, headers={'Content-Type': 'application/json'})
+    
+    try:
+        urllib.request.urlopen(req, timeout=5)
+    except:
+        pass
+
+
+def send_photo(chat_id: int, photo_url: str, caption: str) -> None:
+    payload = {'chat_id': chat_id, 'photo': photo_url, 'caption': caption}
+    data = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(f"{TELEGRAM_API}/sendPhoto", data=data, headers={'Content-Type': 'application/json'})
+    
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except:
+        pass
+
+
+def send_video(chat_id: int, video_url: str, caption: str) -> None:
+    payload = {'chat_id': chat_id, 'video': video_url, 'caption': caption}
+    data = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(f"{TELEGRAM_API}/sendVideo", data=data, headers={'Content-Type': 'application/json'})
+    
+    try:
+        urllib.request.urlopen(req, timeout=15)
+    except:
+        pass
+
+
+def log_error(user_id: int, order_id: int, workflow: str, error_type: str, message: str, update: Dict) -> None:
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO error_logs (user_id, order_id, workflow_name, error_type, error_message, telegram_update)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (user_id, order_id, workflow, error_type, message, Json(update)))
+        conn.commit()
+        conn.close()
+    except:
+        pass

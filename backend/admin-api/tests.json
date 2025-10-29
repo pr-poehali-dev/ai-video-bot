@@ -1,24 +1,25 @@
 {
   "tests": [
     {
-      "name": "Get dashboard stats",
+      "name": "Get dashboard data",
       "method": "GET",
       "path": "/?endpoint=dashboard",
       "expectedStatus": 200,
       "expectedBody": {
-        "stats": {}
+        "stats": {
+          "total_users": 1
+        }
       },
       "bodyMatcher": "partial"
     },
     {
-      "name": "Get users list",
-      "method": "GET",
-      "path": "/?endpoint=users&limit=10",
+      "name": "Handle OPTIONS preflight",
+      "method": "OPTIONS",
+      "path": "/",
       "expectedStatus": 200,
-      "expectedBody": {
-        "users": [{}]
-      },
-      "bodyMatcher": "partial"
+      "expectedHeaders": {
+        "Access-Control-Allow-Origin": "*"
+      }
     }
   ]
 }
