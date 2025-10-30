@@ -46,8 +46,14 @@ def send_telegram_message(chat_id: int, text: str, reply_markup: Optional[Dict] 
         data=json.dumps(data).encode('utf-8'),
         headers={'Content-Type': 'application/json'}
     )
-    with urllib.request.urlopen(req) as response:
-        return json.loads(response.read().decode('utf-8'))
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            return json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8')
+        print(f"[ERROR] Telegram API error: {e.code} - {error_body}")
+        raise
 
 def main_menu_keyboard():
     return {
