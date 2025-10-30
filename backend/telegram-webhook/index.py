@@ -21,6 +21,7 @@ GEN_MODEL_TEXT2VIDEO = os.environ.get('GEN_MODEL_TEXT2VIDEO', 'sora-2-pro-text-t
 GEN_MODEL_IMAGE2VIDEO = os.environ.get('GEN_MODEL_IMAGE2VIDEO', 'sora-2-pro-image-to-video')
 GEN_MODEL_STORYBOARD = os.environ.get('GEN_MODEL_STORYBOARD', 'sora-2-pro-storyboard')
 GEN_MODEL_IMAGE = os.environ.get('GEN_MODEL_IMAGE', '4o-image-api')
+GEN_CALLBACK_URL = os.environ.get('GEN_CALLBACK_URL', 'https://functions.poehali.dev/1655da17-3061-4871-9fbb-026dcf946587')
 TELEGRAM_PAYMENT_PROVIDER_TOKEN = os.environ.get('TELEGRAM_PAYMENT_PROVIDER_TOKEN', '')
 TELEGRAM_STARS_ENABLED = os.environ.get('TELEGRAM_STARS_ENABLED', 'true').lower() == 'true'
 
@@ -63,6 +64,8 @@ def create_menu_keyboard():
         'inline_keyboard': [
             [{'text': '🎨 Превью', 'callback_data': 'create_preview'}],
             [{'text': '📝 Видео из текста', 'callback_data': 'create_textvideo'}],
+            [{'text': '🖼️ Видео из картинки', 'callback_data': 'create_imagevideo'}],
+            [{'text': '🎬 Сториборд', 'callback_data': 'create_storyboard'}],
             [{'text': '⬅️ Назад', 'callback_data': 'back_to_main'}]
         ]
     }
@@ -325,6 +328,52 @@ def handle_create_textvideo(conn, chat_id: int, user_id: int):
     
     send_telegram_message(chat_id, "📝 <b>Видео из текста</b>\n\nОпишите видео:")
 
+def handle_create_imagevideo(conn, chat_id: int, user_id: int):
+    with conn.cursor() as cur:
+        cur.execute("SELECT balance FROM t_p62125649_ai_video_bot.users WHERE user_id = %s", (user_id,))
+        result = cur.fetchone()
+        
+        if not result or result[0] < 300:
+            send_telegram_message(chat_id, "❌ Недостаточно кредитов (мин. 300). Пополните баланс.", main_menu_keyboard())
+            return
+        
+        cur.execute("""
+            INSERT INTO t_p62125649_ai_video_bot.user_states (user_id, state, updated_at)
+            VALUES (%s, 'waiting_image_to_video', CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id) 
+            DO UPDATE SET state = 'waiting_image_to_video', updated_at = CURRENT_TIMESTAMP
+        """, (user_id,))
+        conn.commit()
+    
+    send_telegram_message(chat_id, "🖼️ <b>Видео из картинки</b>\n\nОтправьте фото, которое нужно оживить:")
+
+def handle_create_storyboard(conn, chat_id: int, user_id: int):
+    with conn.cursor() as cur:
+        cur.execute("SELECT balance FROM t_p62125649_ai_video_bot.users WHERE user_id = %s", (user_id,))
+        result = cur.fetchone()
+        
+        if not result or result[0] < 500:
+            send_telegram_message(chat_id, "❌ Недостаточно кредитов (мин. 500). Пополните баланс.", main_menu_keyboard())
+            return
+        
+        cur.execute("""
+            INSERT INTO t_p62125649_ai_video_bot.user_states (user_id, state, updated_at)
+            VALUES (%s, 'waiting_storyboard_scenes', CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id) 
+            DO UPDATE SET state = 'waiting_storyboard_scenes', updated_at = CURRENT_TIMESTAMP
+        """, (user_id,))
+        conn.commit()
+    
+    keyboard = {
+        'inline_keyboard': [
+            [{'text': '3 сцены', 'callback_data': 'storyboard_scenes_3'}],
+            [{'text': '5 сцен', 'callback_data': 'storyboard_scenes_5'}],
+            [{'text': '10 сцен', 'callback_data': 'storyboard_scenes_10'}],
+            [{'text': '❌ Отмена', 'callback_data': 'back_to_main'}]
+        ]
+    }
+    send_telegram_message(chat_id, "🎬 <b>Сториборд</b>\n\nСколько сцен сделать?", keyboard)
+
 def handle_preview_prompt(conn, chat_id: int, user_id: int, prompt: str):
     with conn.cursor() as cur:
         cur.execute("SELECT balance FROM t_p62125649_ai_video_bot.users WHERE user_id = %s", (user_id,))
@@ -487,10 +536,13 @@ def handle_quality_selection(conn, chat_id: int, user_id: int, quality: str):
     try:
         request_data = {
             'model': GEN_MODEL_TEXT2VIDEO,
-            'prompt': prompt,
-            'duration': duration,
-            'quality': quality,
-            'api_key': GEN_API_KEY
+            'callbackUrl': GEN_CALLBACK_URL,
+            'input': {
+                'prompt': prompt,
+                'n_frames': f'{duration}s',
+                'aspect_ratio': 'landscape',
+                'size': 'high' if quality == 'high' else 'standard'
+            }
         }
         
         req = urllib.request.Request(
@@ -502,16 +554,17 @@ def handle_quality_selection(conn, chat_id: int, user_id: int, quality: str):
         with urllib.request.urlopen(req, timeout=30) as response:
             result = json.loads(response.read().decode('utf-8'))
             
-            if result.get('job_id'):
+            task_id_from_api = result.get('data', {}).get('taskId') or result.get('job_id')
+            if task_id_from_api:
                 with conn.cursor() as cur:
                     cur.execute("""
                         UPDATE t_p62125649_ai_video_bot.orders 
                         SET external_job_id = %s
                         WHERE task_id = %s
-                    """, (result['job_id'], task_id))
+                    """, (task_id_from_api, task_id))
                     conn.commit()
                 
-                send_telegram_message(chat_id, "⏳ Видео в обработке. Уведомим когда будет готово.", main_menu_keyboard())
+                send_telegram_message(chat_id, "✅ Заказ создан! Я пришлю видео, как только оно будет готово.", main_menu_keyboard())
             else:
                 raise Exception("Invalid API response")
     except Exception as e:
@@ -525,6 +578,195 @@ def handle_quality_selection(conn, chat_id: int, user_id: int, quality: str):
             conn.commit()
         
         send_telegram_message(chat_id, "❌ Ошибка генерации. Кредиты возвращены.", main_menu_keyboard())
+
+def get_telegram_file_url(file_id: str) -> str:
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/getFile'
+    data = {'file_id': file_id}
+    req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req) as response:
+        result = json.loads(response.read().decode('utf-8'))
+        file_path = result['result']['file_path']
+        return f'https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}'
+
+def handle_image_to_video_photo(conn, chat_id: int, user_id: int, photo: list):
+    file_id = photo[-1]['file_id']
+    image_url = get_telegram_file_url(file_id)
+    cost = 300
+    
+    with conn.cursor() as cur:
+        cur.execute("SELECT balance FROM t_p62125649_ai_video_bot.users WHERE user_id = %s", (user_id,))
+        result = cur.fetchone()
+        
+        if not result or result[0] < cost:
+            send_telegram_message(chat_id, "❌ Недостаточно кредитов. Пополните баланс.", main_menu_keyboard())
+            return
+        
+        cur.execute("UPDATE t_p62125649_ai_video_bot.users SET balance = balance - %s WHERE user_id = %s", (cost, user_id))
+        
+        task_id = f'imagevideo_{user_id}_{int(datetime.now().timestamp())}'
+        cur.execute("""
+            INSERT INTO t_p62125649_ai_video_bot.orders 
+            (user_id, order_type, prompt, status, cost, task_id)
+            VALUES (%s, 'image-to-video', %s, 'processing', %s, %s)
+            RETURNING order_id
+        """, (user_id, 'animate this image', cost, task_id))
+        
+        order_id = cur.fetchone()[0]
+        
+        cur.execute("""
+            INSERT INTO t_p62125649_ai_video_bot.transactions 
+            (user_id, amount, type, description, order_id)
+            VALUES (%s, %s, 'video', 'Списание за image-to-video', %s)
+        """, (user_id, -cost, order_id))
+        
+        cur.execute("DELETE FROM t_p62125649_ai_video_bot.user_states WHERE user_id = %s", (user_id,))
+        conn.commit()
+    
+    send_telegram_message(chat_id, "⏳ Создаю видео из вашей картинки...")
+    
+    try:
+        request_data = {
+            'model': GEN_MODEL_IMAGE2VIDEO,
+            'callbackUrl': GEN_CALLBACK_URL,
+            'input': {
+                'prompt': 'animate this image',
+                'image_urls': [image_url],
+                'aspect_ratio': 'landscape',
+                'n_frames': '10',
+                'size': 'high',
+                'remove_watermark': True
+            }
+        }
+        
+        req = urllib.request.Request(
+            GEN_SORA_API_URL,
+            data=json.dumps(request_data).encode('utf-8'),
+            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {GEN_API_KEY}'}
+        )
+        
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            
+            if result.get('data', {}).get('taskId'):
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE t_p62125649_ai_video_bot.orders 
+                        SET external_job_id = %s
+                        WHERE task_id = %s
+                    """, (result['data']['taskId'], task_id))
+                    conn.commit()
+                
+                send_telegram_message(chat_id, "✅ Заказ создан! Я пришлю видео, как только оно будет готово.", main_menu_keyboard())
+            else:
+                raise Exception("Invalid API response")
+    except Exception as e:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE t_p62125649_ai_video_bot.orders 
+                SET status = 'failed', error_message = %s
+                WHERE task_id = %s
+            """, (str(e), task_id))
+            cur.execute("UPDATE t_p62125649_ai_video_bot.users SET balance = balance + %s WHERE user_id = %s", (cost, user_id))
+            conn.commit()
+        
+        send_telegram_message(chat_id, "❌ Ошибка создания заказа. Кредиты возвращены.", main_menu_keyboard())
+
+def handle_storyboard_scene_input(conn, chat_id: int, user_id: int, text: str, state: Dict):
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT temp_data FROM t_p62125649_ai_video_bot.user_states WHERE user_id = %s", (user_id,))
+        result = cur.fetchone()
+        temp_data = json.loads(result['temp_data']) if result and result['temp_data'] else {}
+        
+        scenes = temp_data.get('scenes', [])
+        total_scenes = temp_data.get('total_scenes', 3)
+        current_scene = len(scenes) + 1
+        
+        scenes.append({'text': text, 'duration': 7.5})
+        
+        if current_scene < total_scenes:
+            temp_data['scenes'] = scenes
+            cur.execute("""
+                UPDATE t_p62125649_ai_video_bot.user_states 
+                SET state = %s, temp_data = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = %s
+            """, (f'waiting_storyboard_scene_{current_scene + 1}', json.dumps(temp_data), user_id))
+            conn.commit()
+            
+            send_telegram_message(chat_id, f"Сцена {current_scene} сохранена!\n\nОпишите сцену {current_scene + 1}:")
+        else:
+            cost = 500
+            
+            cur.execute("SELECT balance FROM t_p62125649_ai_video_bot.users WHERE user_id = %s", (user_id,))
+            balance_result = cur.fetchone()
+            
+            if not balance_result or balance_result['balance'] < cost:
+                send_telegram_message(chat_id, "❌ Недостаточно кредитов. Пополните баланс.", main_menu_keyboard())
+                return
+            
+            cur.execute("UPDATE t_p62125649_ai_video_bot.users SET balance = balance - %s WHERE user_id = %s", (cost, user_id))
+            
+            task_id = f'storyboard_{user_id}_{int(datetime.now().timestamp())}'
+            cur.execute("""
+                INSERT INTO t_p62125649_ai_video_bot.orders 
+                (user_id, order_type, prompt, status, cost, task_id, scenes_count)
+                VALUES (%s, 'storyboard', %s, 'processing', %s, %s, %s)
+                RETURNING order_id
+            """, (user_id, json.dumps(scenes), cost, task_id, total_scenes))
+            
+            order_id = cur.fetchone()['order_id']
+            
+            cur.execute("""
+                INSERT INTO t_p62125649_ai_video_bot.transactions 
+                (user_id, amount, type, description, order_id)
+                VALUES (%s, %s, 'video', 'Списание за storyboard', %s)
+            """, (user_id, -cost, order_id))
+            
+            cur.execute("DELETE FROM t_p62125649_ai_video_bot.user_states WHERE user_id = %s", (user_id,))
+            conn.commit()
+            
+            send_telegram_message(chat_id, f"⏳ Создаю сториборд из {total_scenes} сцен...")
+            
+            try:
+                request_data = {
+                    'model': GEN_MODEL_STORYBOARD,
+                    'callbackUrl': GEN_CALLBACK_URL,
+                    'input': {
+                        'shots': scenes,
+                        'n_frames': '15s',
+                        'aspect_ratio': 'landscape'
+                    }
+                }
+                
+                req = urllib.request.Request(
+                    GEN_SORA_API_URL,
+                    data=json.dumps(request_data).encode('utf-8'),
+                    headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {GEN_API_KEY}'}
+                )
+                
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    result = json.loads(response.read().decode('utf-8'))
+                    
+                    if result.get('data', {}).get('taskId'):
+                        cur.execute("""
+                            UPDATE t_p62125649_ai_video_bot.orders 
+                            SET external_job_id = %s
+                            WHERE task_id = %s
+                        """, (result['data']['taskId'], task_id))
+                        conn.commit()
+                        
+                        send_telegram_message(chat_id, "✅ Заказ создан! Я пришлю сториборд, как только он будет готов.", main_menu_keyboard())
+                    else:
+                        raise Exception("Invalid API response")
+            except Exception as e:
+                cur.execute("""
+                    UPDATE t_p62125649_ai_video_bot.orders 
+                    SET status = 'failed', error_message = %s
+                    WHERE task_id = %s
+                """, (str(e), task_id))
+                cur.execute("UPDATE t_p62125649_ai_video_bot.users SET balance = balance + %s WHERE user_id = %s", (cost, user_id))
+                conn.commit()
+                
+                send_telegram_message(chat_id, "❌ Ошибка создания заказа. Кредиты возвращены.", main_menu_keyboard())
 
 def handle_callback_query(conn, callback_query: Dict):
     callback_id = callback_query['id']
@@ -567,6 +809,21 @@ def handle_callback_query(conn, callback_query: Dict):
         handle_create_preview(conn, chat_id, user_id)
     elif data == 'create_textvideo':
         handle_create_textvideo(conn, chat_id, user_id)
+    elif data == 'create_imagevideo':
+        handle_create_imagevideo(conn, chat_id, user_id)
+    elif data == 'create_storyboard':
+        handle_create_storyboard(conn, chat_id, user_id)
+    elif data.startswith('storyboard_scenes_'):
+        scenes_count = int(data.split('_')[2])
+        with conn.cursor() as cur:
+            temp_data = json.dumps({'scenes': [], 'total_scenes': scenes_count})
+            cur.execute("""
+                UPDATE t_p62125649_ai_video_bot.user_states 
+                SET state = 'waiting_storyboard_scene_1', temp_data = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = %s
+            """, (temp_data, user_id))
+            conn.commit()
+        send_telegram_message(chat_id, f"Отлично! Теперь опишите сцену 1 из {scenes_count}:")
     elif data == 'topup_card':
         handle_topup_card(chat_id)
     elif data == 'topup_stars':
@@ -590,6 +847,7 @@ def handle_message(conn, message: Dict):
     username = message['from'].get('username', '')
     first_name = message['from'].get('first_name', 'User')
     text = message.get('text', '')
+    photo = message.get('photo', [])
     
     if not check_rate_limit(conn, user_id, 'message'):
         send_telegram_message(chat_id, "⚠️ Слишком много запросов. Подождите минуту.")
@@ -605,7 +863,7 @@ def handle_message(conn, message: Dict):
         return
     
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("SELECT state FROM t_p62125649_ai_video_bot.user_states WHERE user_id = %s", (user_id,))
+        cur.execute("SELECT state, temp_data FROM t_p62125649_ai_video_bot.user_states WHERE user_id = %s", (user_id,))
         state = cur.fetchone()
     
     if not state:
@@ -616,6 +874,10 @@ def handle_message(conn, message: Dict):
         handle_preview_prompt(conn, chat_id, user_id, text)
     elif state['state'] == 'waiting_textvideo_prompt':
         handle_textvideo_prompt(conn, chat_id, user_id, text)
+    elif state['state'] == 'waiting_image_to_video' and photo:
+        handle_image_to_video_photo(conn, chat_id, user_id, photo)
+    elif state['state'].startswith('waiting_storyboard_scene_'):
+        handle_storyboard_scene_input(conn, chat_id, user_id, text, state)
     else:
         send_telegram_message(chat_id, "Используйте кнопки для выбора:", main_menu_keyboard())
 

@@ -155,6 +155,81 @@ def process_order(conn, order: Dict) -> str:
         
         return f"pending_{order_id}"
 
+def handle_generation_callback(conn, callback_data: Dict) -> Dict[str, Any]:
+    data = callback_data.get('data', {})
+    task_id = data.get('taskId')
+    state = data.get('state')
+    result_urls = data.get('resultUrls', [])
+    fail_msg = data.get('failMsg', '')
+    
+    if not task_id:
+        return {'error': 'Missing taskId'}
+    
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT * FROM t_p62125649_ai_video_bot.orders 
+            WHERE external_job_id = %s
+        """, (task_id,))
+        
+        order = cur.fetchone()
+        
+        if not order:
+            return {'error': 'Order not found'}
+        
+        order_id = order['order_id']
+        user_id = order['user_id']
+        cost = order['cost']
+        order_type = order['order_type']
+        
+        if state == 'success' and result_urls:
+            result_url = result_urls[0]
+            
+            cur.execute("""
+                UPDATE t_p62125649_ai_video_bot.orders 
+                SET status = 'completed', result_url = %s, completed_at = CURRENT_TIMESTAMP
+                WHERE order_id = %s
+            """, (result_url, order_id))
+            conn.commit()
+            
+            type_labels = {
+                'preview': 'Превью',
+                'text-to-video': 'Видео из текста',
+                'image-to-video': 'Видео из картинки',
+                'storyboard': 'Сториборд'
+            }
+            
+            caption = f"✅ Готово! {type_labels.get(order_type, 'Заказ')} #{order_id}"
+            
+            try:
+                send_telegram_video(user_id, result_url, caption)
+            except:
+                send_telegram_message(user_id, f"{caption}\n\n{result_url}")
+            
+            return {'status': 'processed', 'order_id': order_id}
+            
+        elif state == 'fail':
+            cur.execute("""
+                UPDATE t_p62125649_ai_video_bot.orders 
+                SET status = 'failed', error_message = %s, completed_at = CURRENT_TIMESTAMP
+                WHERE order_id = %s
+            """, (fail_msg or 'Generation failed', order_id))
+            
+            cur.execute("UPDATE t_p62125649_ai_video_bot.users SET balance = balance + %s WHERE user_id = %s", (cost, user_id))
+            
+            cur.execute("""
+                INSERT INTO t_p62125649_ai_video_bot.transactions 
+                (user_id, amount, type, description, order_id)
+                VALUES (%s, %s, 'refund', 'Возврат за ошибку генерации', %s)
+            """, (user_id, cost, order_id))
+            
+            conn.commit()
+            
+            send_telegram_message(user_id, f"❌ Ошибка генерации заказа #{order_id}.\n{cost} кредитов возвращено на баланс.")
+            
+            return {'status': 'refunded', 'order_id': order_id}
+    
+    return {'error': 'Invalid state'}
+
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     method = event.get('httpMethod', 'GET')
     
@@ -163,7 +238,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             'statusCode': 200,
             'headers': {
                 'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'GET, OPTIONS',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type',
                 'Access-Control-Max-Age': '86400'
             },
@@ -173,6 +248,19 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     
     try:
         conn = get_db_connection()
+        
+        if method == 'POST':
+            body_str = event.get('body', '{}')
+            callback_data = json.loads(body_str)
+            result = handle_generation_callback(conn, callback_data)
+            conn.close()
+            
+            return {
+                'statusCode': 200 if 'error' not in result else 400,
+                'headers': {'Content-Type': 'application/json'},
+                'isBase64Encoded': False,
+                'body': json.dumps(result)
+            }
         
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
