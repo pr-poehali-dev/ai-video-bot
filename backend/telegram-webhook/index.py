@@ -381,11 +381,14 @@ def handle_create_storyboard(conn, chat_id: int, user_id: int):
     send_telegram_message(chat_id, "🎬 <b>Сториборд</b>\n\nСколько сцен сделать?", keyboard)
 
 def handle_preview_prompt(conn, chat_id: int, user_id: int, prompt: str):
+    print(f"[DEBUG] handle_preview_prompt called for user {user_id}, prompt: {prompt}")
+    
     with conn.cursor() as cur:
         cur.execute("SELECT balance FROM t_p62125649_ai_video_bot.users WHERE user_id = %s", (user_id,))
         result = cur.fetchone()
         
         if not result or result[0] < PREVIEW_COST:
+            print(f"[ERROR] Insufficient balance for user {user_id}: {result[0] if result else 0}")
             send_telegram_message(chat_id, "❌ Недостаточно кредитов.", main_menu_keyboard())
             return
         
@@ -413,11 +416,14 @@ def handle_preview_prompt(conn, chat_id: int, user_id: int, prompt: str):
     send_telegram_message(chat_id, "⏳ Генерирую превью... Это займёт несколько секунд.")
     
     try:
+        print(f"[DEBUG] Sending request to {GEN_IMAGE_API_URL}")
         request_data = {
             'model': GEN_MODEL_IMAGE,
             'prompt': prompt,
             'api_key': GEN_API_KEY
         }
+        
+        print(f"[DEBUG] Request data: {json.dumps(request_data)}")
         
         req = urllib.request.Request(
             GEN_IMAGE_API_URL,
@@ -426,7 +432,9 @@ def handle_preview_prompt(conn, chat_id: int, user_id: int, prompt: str):
         )
         
         with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode('utf-8'))
+            response_text = response.read().decode('utf-8')
+            print(f"[DEBUG] API response: {response_text}")
+            result = json.loads(response_text)
             
             if result.get('status') == 'success' and result.get('image_url'):
                 with conn.cursor() as cur:
@@ -439,8 +447,12 @@ def handle_preview_prompt(conn, chat_id: int, user_id: int, prompt: str):
                 
                 send_telegram_message(chat_id, f"✅ Ваше превью готово!\n\n{result['image_url']}", main_menu_keyboard())
             else:
-                raise Exception("Invalid API response")
+                raise Exception(f"Invalid API response: {result}")
     except Exception as e:
+        print(f"[ERROR] Generation error: {str(e)}")
+        import traceback
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE t_p62125649_ai_video_bot.orders 
@@ -872,19 +884,26 @@ def handle_message(conn, message: Dict):
         cur.execute("SELECT state, temp_data FROM t_p62125649_ai_video_bot.user_states WHERE user_id = %s", (user_id,))
         state = cur.fetchone()
     
+    print(f"[DEBUG] User {user_id} state: {state}")
+    
     if not state:
         send_telegram_message(chat_id, "Используйте кнопки меню:", main_menu_keyboard())
         return
     
-    if state['state'] == 'waiting_preview_prompt':
+    current_state = state['state']
+    print(f"[DEBUG] Processing state: {current_state}")
+    
+    if current_state == 'waiting_preview_prompt':
+        print(f"[DEBUG] Calling handle_preview_prompt with text: {text}")
         handle_preview_prompt(conn, chat_id, user_id, text)
-    elif state['state'] == 'waiting_textvideo_prompt':
+    elif current_state == 'waiting_textvideo_prompt':
         handle_textvideo_prompt(conn, chat_id, user_id, text)
-    elif state['state'] == 'waiting_image_to_video' and photo:
+    elif current_state == 'waiting_image_to_video' and photo:
         handle_image_to_video_photo(conn, chat_id, user_id, photo)
-    elif state['state'].startswith('waiting_storyboard_scene_'):
+    elif current_state.startswith('waiting_storyboard_scene_'):
         handle_storyboard_scene_input(conn, chat_id, user_id, text, state)
     else:
+        print(f"[DEBUG] Unknown state: {current_state}")
         send_telegram_message(chat_id, "Используйте кнопки для выбора:", main_menu_keyboard())
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
