@@ -1,4 +1,5 @@
 {
+  "telegram-payments": "https://functions.poehali.dev/dd094dcf-b4f4-4ba0-85c9-c4dc68ac0161",
   "yookassa-webhook": "https://functions.poehali.dev/d4a50448-3f54-44f1-ab5d-01f6cc3eb69e",
   "telegram-webhook": "https://functions.poehali.dev/bb7d0a58-b8cf-4320-9a8e-000f952266d9",
   "video-status-checker": "https://functions.poehali.dev/1655da17-3061-4871-9fbb-026dcf946587",

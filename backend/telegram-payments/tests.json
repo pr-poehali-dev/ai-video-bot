@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "name": "Test OPTIONS request for CORS",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Test pre_checkout_query handling",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "pre_checkout_query": {
+          "id": "test_query_123",
+          "from": {"id": 123456789, "first_name": "Test"},
+          "currency": "RUB",
+          "total_amount": 10000
+        }
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "status": "string"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}

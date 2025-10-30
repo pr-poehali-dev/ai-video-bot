@@ -20,6 +20,7 @@ interface DashboardData {
     processing_orders: number;
     total_revenue: number;
     credits_spent: number;
+    total_errors?: number;
   };
   recent_users: Array<{
     user_id: number;
@@ -60,6 +61,7 @@ export default function Index() {
   const [balanceAmount, setBalanceAmount] = useState('');
   const [balanceReason, setBalanceReason] = useState('');
   const [updating, setUpdating] = useState(false);
+  const [resettingStats, setResettingStats] = useState(false);
 
   const loadDashboard = () => {
     setLoading(true);
@@ -128,6 +130,41 @@ export default function Index() {
       alert('Ошибка при обновлении баланса');
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const handleResetStats = async () => {
+    if (!confirm('Вы уверены, что хотите обнулить статистику? Это действие нельзя отменить.')) {
+      return;
+    }
+
+    setResettingStats(true);
+    try {
+      const response = await fetch(API_BASE, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Key': ADMIN_KEY
+        },
+        body: JSON.stringify({
+          action: 'reset_stats',
+          admin_username: 'admin'
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert('✅ Статистика успешно сброшена!');
+        loadDashboard();
+      } else {
+        alert('❌ Ошибка: ' + (result.error || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Failed to reset stats:', error);
+      alert('❌ Не удалось сбросить статистику');
+    } finally {
+      setResettingStats(false);
     }
   };
 
@@ -267,34 +304,85 @@ export default function Index() {
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-blue-500 to-blue-600 text-white border-0 shadow-lg hover:shadow-xl transition-shadow">
+          <Card className="bg-gradient-to-br from-red-500 to-red-600 text-white border-0 shadow-lg hover:shadow-xl transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium opacity-90">Конверсия</CardTitle>
-              <Icon name="TrendingUp" className="opacity-80" size={20} />
+              <CardTitle className="text-sm font-medium opacity-90">Ошибки</CardTitle>
+              <Icon name="AlertTriangle" className="opacity-80" size={20} />
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold">
-                {data.stats.total_users > 0 
-                  ? Math.round((data.stats.total_revenue / data.stats.total_users) * 100) / 100
-                  : 0}₽
-              </div>
-              <p className="text-xs opacity-80 mt-1">Средний чек на пользователя</p>
+              <div className="text-3xl font-bold">{data.stats.total_errors || 0}</div>
+              <p className="text-xs opacity-80 mt-1">
+                Всего зафиксировано
+              </p>
             </CardContent>
           </Card>
         </div>
 
-        <Tabs defaultValue="orders" className="space-y-4">
-          <TabsList className="bg-white/80 backdrop-blur">
-            <TabsTrigger value="orders" className="gap-2">
-              <Icon name="ShoppingBag" size={16} />
-              Заказы
-            </TabsTrigger>
-            <TabsTrigger value="users" className="gap-2">
-              <Icon name="Users" size={16} />
+        <Card className="border-2 border-purple-200 shadow-lg">
+          <CardHeader className="bg-gradient-to-r from-purple-50 to-pink-50">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Icon name="BarChart3" size={24} className="text-purple-600" />
+                  Статистика проекта
+                </CardTitle>
+                <CardDescription>Текущие агрегаты из базы данных</CardDescription>
+              </div>
+              <Button 
+                onClick={handleResetStats}
+                disabled={resettingStats}
+                variant="destructive"
+                size="sm"
+              >
+                <Icon name="RotateCcw" size={16} className="mr-2" />
+                {resettingStats ? 'Сброс...' : 'Обнулить статистику'}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Icon name="Users" size={18} />
+                  <span className="text-sm font-medium">Пользователи</span>
+                </div>
+                <div className="text-2xl font-bold">{data.stats.total_users}</div>
+                <p className="text-xs text-muted-foreground">{data.stats.active_users_24h} активных за 24ч</p>
+              </div>
+              
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Icon name="ShoppingCart" size={18} />
+                  <span className="text-sm font-medium">Заказы</span>
+                </div>
+                <div className="text-2xl font-bold">{data.stats.total_orders}</div>
+                <p className="text-xs text-muted-foreground">{data.stats.processing_orders} в обработке</p>
+              </div>
+              
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Icon name="DollarSign" size={18} />
+                  <span className="text-sm font-medium">Выручка</span>
+                </div>
+                <div className="text-2xl font-bold">{data.stats.total_revenue}₽</div>
+                <p className="text-xs text-muted-foreground">{data.stats.credits_spent} кредитов потрачено</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Tabs defaultValue="users" className="space-y-4">
+          <TabsList className="grid w-full grid-cols-3 lg:w-auto">
+            <TabsTrigger value="users">
+              <Icon name="Users" size={16} className="mr-2" />
               Пользователи
             </TabsTrigger>
-            <TabsTrigger value="analytics" className="gap-2">
-              <Icon name="BarChart3" size={16} />
+            <TabsTrigger value="orders">
+              <Icon name="ShoppingCart" size={16} className="mr-2" />
+              Заказы
+            </TabsTrigger>
+            <TabsTrigger value="analytics">
+              <Icon name="BarChart3" size={16} className="mr-2" />
               Аналитика
             </TabsTrigger>
           </TabsList>

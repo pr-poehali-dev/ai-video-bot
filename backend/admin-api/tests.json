@@ -10,7 +10,10 @@
           "total_users": "number"
         }
       },
-      "bodyMatcher": "partial"
+      "bodyMatcher": "partial",
+      "headers": {
+        "X-Admin-Key": "test_admin_key_123"
+      }
     },
     {
       "name": "Update user balance",
@@ -27,7 +30,10 @@
       "expectedBody": {
         "success": true
       },
-      "bodyMatcher": "partial"
+      "bodyMatcher": "partial",
+      "headers": {
+        "X-Admin-Key": "test_admin_key_123"
+      }
     },
     {
       "name": "Handle OPTIONS preflight",

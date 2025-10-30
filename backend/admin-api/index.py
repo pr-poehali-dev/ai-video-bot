@@ -34,19 +34,35 @@ def get_dashboard_stats(conn) -> Dict[str, Any]:
         cur.execute("SELECT COUNT(*) FROM t_p62125649_ai_video_bot.orders WHERE status = 'processing'")
         processing_orders = cur.fetchone()['count']
         
+        cur.execute("SELECT COALESCE(metric_value, 0) FROM t_p62125649_ai_video_bot.stats_cache WHERE metric_name = 'total_revenue_offset'")
+        revenue_offset = cur.fetchone()
+        revenue_offset = int(revenue_offset['coalesce']) if revenue_offset else 0
+        
         cur.execute("SELECT COALESCE(SUM(amount), 0) FROM t_p62125649_ai_video_bot.transactions WHERE type = 'purchase'")
-        total_revenue = cur.fetchone()['coalesce']
+        total_revenue = int(cur.fetchone()['coalesce']) - revenue_offset
         
         cur.execute("SELECT COALESCE(SUM(-amount), 0) FROM t_p62125649_ai_video_bot.transactions WHERE type IN ('preview', 'video')")
         credits_spent = cur.fetchone()['coalesce']
         
+        cur.execute("SELECT COALESCE(metric_value, 0) FROM t_p62125649_ai_video_bot.stats_cache WHERE metric_name = 'total_orders_offset'")
+        orders_offset = cur.fetchone()
+        orders_offset = int(orders_offset['coalesce']) if orders_offset else 0
+        
+        cur.execute("SELECT COALESCE(metric_value, 0) FROM t_p62125649_ai_video_bot.stats_cache WHERE metric_name = 'errors_count_offset'")
+        errors_offset = cur.fetchone()
+        errors_offset = int(errors_offset['coalesce']) if errors_offset else 0
+        
+        cur.execute("SELECT COUNT(*) FROM t_p62125649_ai_video_bot.error_logs")
+        total_errors = int(cur.fetchone()['count']) - errors_offset
+        
         return {
             'total_users': total_users,
             'active_users_24h': active_users,
-            'total_orders': total_orders,
+            'total_orders': max(0, total_orders - orders_offset),
             'processing_orders': processing_orders,
-            'total_revenue': int(total_revenue),
-            'credits_spent': int(credits_spent)
+            'total_revenue': max(0, total_revenue),
+            'credits_spent': int(credits_spent),
+            'total_errors': max(0, total_errors)
         }
 
 def get_recent_users(conn, limit: int = 10):
@@ -122,6 +138,35 @@ def update_user_balance(conn, user_id: int, amount: int, admin_username: str, re
         
         return {'success': True, 'old_balance': old_balance, 'new_balance': new_balance}
 
+def reset_stats(conn, admin_username: str) -> Dict[str, Any]:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT COALESCE(SUM(amount), 0) FROM t_p62125649_ai_video_bot.transactions WHERE type = 'purchase'")
+        current_revenue = int(cur.fetchone()['coalesce'])
+        
+        cur.execute("SELECT COUNT(*) FROM t_p62125649_ai_video_bot.orders")
+        current_orders = int(cur.fetchone()['count'])
+        
+        cur.execute("SELECT COUNT(*) FROM t_p62125649_ai_video_bot.error_logs")
+        current_errors = int(cur.fetchone()['count'])
+        
+        cur.execute("""
+            INSERT INTO t_p62125649_ai_video_bot.stats_cache (metric_name, metric_value, updated_at)
+            VALUES ('total_revenue_offset', %s, NOW()),
+                   ('total_orders_offset', %s, NOW()),
+                   ('errors_count_offset', %s, NOW())
+            ON CONFLICT (metric_name) DO UPDATE 
+            SET metric_value = EXCLUDED.metric_value, updated_at = NOW()
+        """, (current_revenue, current_orders, current_errors))
+        
+        cur.execute("""
+            INSERT INTO t_p62125649_ai_video_bot.admin_actions (admin_username, action_type, details)
+            VALUES (%s, 'reset_stats', %s)
+        """, (admin_username, json.dumps({'reset_at': str(current_revenue), 'orders': current_orders, 'errors': current_errors})))
+        
+        conn.commit()
+        
+        return {'success': True, 'message': 'Stats reset successfully'}
+
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     method = event.get('httpMethod', 'GET')
     
@@ -182,6 +227,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 reason = body_data.get('reason', 'Manual adjustment')
                 
                 result = update_user_balance(conn, user_id, amount, admin_username, reason)
+                data = result
+            elif action == 'reset_stats':
+                admin_username = body_data.get('admin_username', 'admin')
+                result = reset_stats(conn, admin_username)
                 data = result
             else:
                 data = {'error': 'Unknown action'}

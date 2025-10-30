@@ -17,6 +17,8 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 IMAGE_API_URL = os.environ.get('IMAGE_API_URL', '')
 VIDEO_API_URL = os.environ.get('VIDEO_API_URL', '')
 STORYBOARD_API_URL = os.environ.get('STORYBOARD_API_URL', '')
+TELEGRAM_PAYMENT_PROVIDER_TOKEN = os.environ.get('TELEGRAM_PAYMENT_PROVIDER_TOKEN', '')
+TELEGRAM_STARS_ENABLED = os.environ.get('TELEGRAM_STARS_ENABLED', 'true').lower() == 'true'
 
 PREVIEW_COST = 30
 VIDEO_COSTS = {
@@ -60,6 +62,15 @@ def create_menu_keyboard():
             [{'text': '⬅️ Назад', 'callback_data': 'back_to_main'}]
         ]
     }
+
+def topup_menu_keyboard():
+    keyboard = []
+    if TELEGRAM_PAYMENT_PROVIDER_TOKEN:
+        keyboard.append([{'text': '💳 Оплатить картой', 'callback_data': 'topup_card'}])
+    if TELEGRAM_STARS_ENABLED:
+        keyboard.append([{'text': '⭐ Оплатить звёздами', 'callback_data': 'topup_stars'}])
+    keyboard.append([{'text': '⬅️ Назад', 'callback_data': 'back_to_main'}])
+    return {'inline_keyboard': keyboard}
 
 def check_rate_limit(conn, user_id: int, action_type: str, max_actions: int = 10) -> bool:
     with conn.cursor() as cur:
@@ -163,15 +174,103 @@ def handle_balance(conn, chat_id: int, user_id: int):
             send_telegram_message(chat_id, f"💰 Ваш баланс: {balance} кредитов", keyboard)
 
 def handle_topup(chat_id: int):
+    send_telegram_message(chat_id, "💰 Выберите способ пополнения баланса:", topup_menu_keyboard())
+
+def handle_topup_card(chat_id: int):
     keyboard = {
         'inline_keyboard': [
-            [{'text': '200 кредитов (200₽)', 'callback_data': 'topup_200'}],
-            [{'text': '500 кредитов (500₽)', 'callback_data': 'topup_500'}],
-            [{'text': '1000 кредитов (1000₽)', 'callback_data': 'topup_1000'}],
-            [{'text': '⬅️ Назад', 'callback_data': 'back_to_main'}]
+            [{'text': '100₽', 'callback_data': 'pay_card_100'}],
+            [{'text': '500₽', 'callback_data': 'pay_card_500'}],
+            [{'text': '1000₽', 'callback_data': 'pay_card_1000'}],
+            [{'text': '⬅️ Назад', 'callback_data': 'main_topup'}]
         ]
     }
-    send_telegram_message(chat_id, "💳 Выберите пакет кредитов:", keyboard)
+    send_telegram_message(chat_id, "💳 Выберите сумму пополнения:", keyboard)
+
+def handle_topup_stars(chat_id: int):
+    keyboard = {
+        'inline_keyboard': [
+            [{'text': '10⭐', 'callback_data': 'pay_stars_10'}],
+            [{'text': '50⭐', 'callback_data': 'pay_stars_50'}],
+            [{'text': '100⭐', 'callback_data': 'pay_stars_100'}],
+            [{'text': '⬅️ Назад', 'callback_data': 'main_topup'}]
+        ]
+    }
+    send_telegram_message(chat_id, "⭐ Выберите количество звёзд:", keyboard)
+
+def send_invoice(chat_id: int, title: str, description: str, payload: str, currency: str, prices: list):
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendInvoice'
+    
+    data = {
+        'chat_id': chat_id,
+        'title': title,
+        'description': description,
+        'payload': payload,
+        'currency': currency,
+        'prices': prices
+    }
+    
+    if currency == 'XTR':
+        # Telegram Stars payment - no provider token needed
+        pass
+    else:
+        # Card payment - requires provider token
+        if not TELEGRAM_PAYMENT_PROVIDER_TOKEN:
+            send_telegram_message(chat_id, "❌ Оплата картой временно недоступна", topup_menu_keyboard())
+            return
+        data['provider_token'] = TELEGRAM_PAYMENT_PROVIDER_TOKEN
+    
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(data).encode('utf-8'),
+        headers={'Content-Type': 'application/json'}
+    )
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            return json.loads(response.read().decode('utf-8'))
+    except Exception as e:
+        send_telegram_message(chat_id, f"❌ Ошибка при создании счета: {str(e)}", topup_menu_keyboard())
+        return None
+
+def handle_payment_card(chat_id: int, user_id: int, amount: int):
+    if not TELEGRAM_PAYMENT_PROVIDER_TOKEN:
+        send_telegram_message(chat_id, "❌ Оплата картой временно недоступна", topup_menu_keyboard())
+        return
+    
+    credits = amount
+    title = f"Пополнение баланса на {credits} кредитов"
+    description = f"Пополнение баланса AI Video Studio Bot на {credits} кредитов"
+    payload = json.dumps({'user_id': user_id, 'amount': amount, 'type': 'card'})
+    
+    send_invoice(
+        chat_id=chat_id,
+        title=title,
+        description=description,
+        payload=payload,
+        currency='RUB',
+        prices=[{'label': f'{credits} кредитов', 'amount': amount * 100}]  # amount in kopecks
+    )
+
+def handle_payment_stars(chat_id: int, user_id: int, stars: int):
+    if not TELEGRAM_STARS_ENABLED:
+        send_telegram_message(chat_id, "❌ Оплата звёздами временно недоступна", topup_menu_keyboard())
+        return
+    
+    # 1 star = 10 credits (you can adjust this rate)
+    credits = stars * 10
+    title = f"Пополнение на {credits} кредитов"
+    description = f"Пополнение баланса AI Video Studio Bot за {stars} звёзд"
+    payload = json.dumps({'user_id': user_id, 'stars': stars, 'credits': credits, 'type': 'stars'})
+    
+    send_invoice(
+        chat_id=chat_id,
+        title=title,
+        description=description,
+        payload=payload,
+        currency='XTR',
+        prices=[{'label': f'{credits} кредитов', 'amount': stars}]  # amount in stars
+    )
 
 def handle_help(chat_id: int):
     text = """ℹ️ <b>AI Video Studio Bot</b>
@@ -382,6 +481,16 @@ def handle_callback_query(conn, callback_query: Dict):
         handle_create_preview(conn, chat_id, user_id)
     elif data == 'create_textvideo':
         handle_create_textvideo(conn, chat_id, user_id)
+    elif data == 'topup_card':
+        handle_topup_card(chat_id)
+    elif data == 'topup_stars':
+        handle_topup_stars(chat_id)
+    elif data.startswith('pay_card_'):
+        amount = int(data.split('_')[2])
+        handle_payment_card(chat_id, user_id, amount)
+    elif data.startswith('pay_stars_'):
+        stars = int(data.split('_')[2])
+        handle_payment_stars(chat_id, user_id, stars)
     elif data.startswith('duration_'):
         duration = int(data.split('_')[1])
         handle_duration_selection(conn, chat_id, user_id, duration)
