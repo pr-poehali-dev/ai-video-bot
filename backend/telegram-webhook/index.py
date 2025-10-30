@@ -436,16 +436,51 @@ def handle_preview_prompt(conn, chat_id: int, user_id: int, prompt: str):
             print(f"[DEBUG] API response: {response_text}")
             result = json.loads(response_text)
             
-            if result.get('status') == 'success' and result.get('image_url'):
+            if result.get('code') == 200 and result.get('data', {}).get('taskId'):
+                api_task_id = result['data']['taskId']
+                print(f"[DEBUG] Got taskId: {api_task_id}, will poll for result")
+                
                 with conn.cursor() as cur:
                     cur.execute("""
                         UPDATE t_p62125649_ai_video_bot.orders 
-                        SET status = 'completed', result_url = %s, completed_at = CURRENT_TIMESTAMP
+                        SET external_task_id = %s
                         WHERE task_id = %s
-                    """, (result['image_url'], task_id))
+                    """, (api_task_id, task_id))
                     conn.commit()
                 
-                send_telegram_message(chat_id, f"✅ Ваше превью готово!\n\n{result['image_url']}", main_menu_keyboard())
+                import time
+                max_attempts = 30
+                for attempt in range(max_attempts):
+                    time.sleep(2)
+                    
+                    status_url = f'https://api.kie.ai/api/v1/jobs/task/{api_task_id}'
+                    status_req = urllib.request.Request(status_url, headers={'Authorization': f'Bearer {GEN_API_KEY}'})
+                    
+                    with urllib.request.urlopen(status_req, timeout=10) as status_response:
+                        status_text = status_response.read().decode('utf-8')
+                        status_result = json.loads(status_text)
+                        
+                        print(f"[DEBUG] Poll attempt {attempt+1}: {status_result}")
+                        
+                        if status_result.get('code') == 200:
+                            data = status_result.get('data', {})
+                            if data.get('status') == 'completed':
+                                image_url = data.get('url') or data.get('image_url') or data.get('output', {}).get('image_url')
+                                if image_url:
+                                    with conn.cursor() as cur:
+                                        cur.execute("""
+                                            UPDATE t_p62125649_ai_video_bot.orders 
+                                            SET status = 'completed', result_url = %s, completed_at = CURRENT_TIMESTAMP
+                                            WHERE task_id = %s
+                                        """, (image_url, task_id))
+                                        conn.commit()
+                                    
+                                    send_telegram_message(chat_id, f"✅ Ваше превью готово!\n\n{image_url}", main_menu_keyboard())
+                                    return
+                            elif data.get('status') == 'failed':
+                                raise Exception(f"Generation failed: {data.get('error', 'Unknown error')}")
+                
+                raise Exception("Timeout waiting for image generation")
             else:
                 raise Exception(f"Invalid API response: {result}")
     except Exception as e:
