@@ -9,9 +9,11 @@ import os
 from typing import Dict, Any
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import urllib.request
 
 DATABASE_URL = os.environ.get('DATABASE_URL')
 ADMIN_SECRET_KEY = os.environ.get('ADMIN_SECRET_KEY', '')
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
@@ -249,6 +251,25 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 admin_username = body_data.get('admin_username', 'admin')
                 result = reset_stats(conn, admin_username)
                 data = result
+            elif action == 'set_webhook':
+                webhook_url = body_data.get('webhook_url', 'https://functions.poehali.dev/bb7d0a58-b8cf-4320-9a8e-000f952266d9')
+                
+                url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook'
+                webhook_data = {
+                    'url': webhook_url,
+                    'allowed_updates': ['message', 'callback_query']
+                }
+                
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(webhook_data).encode('utf-8'),
+                    headers={'Content-Type': 'application/json'}
+                )
+                
+                with urllib.request.urlopen(req) as response:
+                    telegram_response = json.loads(response.read().decode('utf-8'))
+                
+                data = {'success': True, 'telegram_response': telegram_response}
             else:
                 data = {'error': 'Unknown action'}
         else:

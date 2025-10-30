@@ -889,19 +889,76 @@ def handle_message(conn, message: Dict):
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     method = event.get('httpMethod', 'POST')
+    params = event.get('queryStringParameters', {})
     
     if method == 'OPTIONS':
         return {
             'statusCode': 200,
             'headers': {
                 'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type',
                 'Access-Control-Max-Age': '86400'
             },
             'isBase64Encoded': False,
             'body': ''
         }
+    
+    if method == 'GET':
+        action = params.get('action')
+        
+        if action == 'info':
+            try:
+                url = f'https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo'
+                req = urllib.request.Request(url)
+                
+                with urllib.request.urlopen(req) as response:
+                    telegram_response = json.loads(response.read().decode('utf-8'))
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json'},
+                    'isBase64Encoded': False,
+                    'body': json.dumps(telegram_response)
+                }
+            except Exception as e:
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json'},
+                    'isBase64Encoded': False,
+                    'body': json.dumps({'error': str(e)})
+                }
+        
+        if action == 'setup':
+            try:
+                url = f'https://api.telegram.org/bot{BOT_TOKEN}/setWebhook'
+                webhook_data = {
+                    'url': 'https://functions.poehali.dev/bb7d0a58-b8cf-4320-9a8e-000f952266d9',
+                    'allowed_updates': ['message', 'callback_query']
+                }
+                
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(webhook_data).encode('utf-8'),
+                    headers={'Content-Type': 'application/json'}
+                )
+                
+                with urllib.request.urlopen(req) as response:
+                    telegram_response = json.loads(response.read().decode('utf-8'))
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json'},
+                    'isBase64Encoded': False,
+                    'body': json.dumps({'success': True, 'response': telegram_response})
+                }
+            except Exception as e:
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json'},
+                    'isBase64Encoded': False,
+                    'body': json.dumps({'error': str(e)})
+                }
     
     try:
         body = json.loads(event.get('body', '{}'))
