@@ -6,11 +6,13 @@ Returns: HTTP response 200 OK для подтверждения получени
 
 import json
 import os
+import time
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Literal
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import urllib.request
+import urllib.error
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -34,6 +36,200 @@ VIDEO_COSTS = {
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
+
+def send_telegram_photo(chat_id: int, photo_url: str, caption: str = "", reply_markup: Optional[Dict] = None):
+    """Отправить фото в Telegram"""
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto'
+    data = {'chat_id': chat_id, 'photo': photo_url, 'caption': caption, 'parse_mode': 'HTML'}
+    if reply_markup:
+        data['reply_markup'] = reply_markup
+    
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(data).encode('utf-8'),
+        headers={'Content-Type': 'application/json'}
+    )
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            print(f"[DEBUG] sendPhoto response: {result}")
+            return result
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8')
+        print(f"[ERROR] Telegram sendPhoto error: {e.code} - {error_body}")
+        raise
+
+def send_telegram_video(chat_id: int, video_url: str, caption: str = "", reply_markup: Optional[Dict] = None):
+    """Отправить видео в Telegram"""
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendVideo'
+    data = {'chat_id': chat_id, 'video': video_url, 'caption': caption, 'parse_mode': 'HTML'}
+    if reply_markup:
+        data['reply_markup'] = reply_markup
+    
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(data).encode('utf-8'),
+        headers={'Content-Type': 'application/json'}
+    )
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            print(f"[DEBUG] sendVideo response: {result}")
+            return result
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8')
+        print(f"[ERROR] Telegram sendVideo error: {e.code} - {error_body}")
+        raise
+
+def edit_telegram_message(chat_id: int, message_id: int, text: str, reply_markup: Optional[Dict] = None):
+    """Редактировать сообщение"""
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/editMessageText'
+    data = {'chat_id': chat_id, 'message_id': message_id, 'text': text, 'parse_mode': 'HTML'}
+    if reply_markup:
+        data['reply_markup'] = reply_markup
+    
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(data).encode('utf-8'),
+        headers={'Content-Type': 'application/json'}
+    )
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            return json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8')
+        print(f"[ERROR] Telegram editMessage error: {e.code} - {error_body}")
+        return None
+
+def start_generation(kind: Literal["preview", "text2video", "image2video", "storyboard"], payload: Dict[str, Any]) -> str:
+    """
+    Запустить генерацию и вернуть task_id
+    kind: тип генерации
+    payload: параметры (prompt, image_url, duration, quality и т.д.)
+    """
+    print(f"[DEBUG] start_generation: kind={kind}, payload={payload}")
+    
+    if kind == "preview":
+        api_url = GEN_IMAGE_API_URL
+        request_data = {
+            'model': GEN_MODEL_IMAGE,
+            'prompt': payload['prompt'],
+            'api_key': GEN_API_KEY
+        }
+    elif kind == "text2video":
+        api_url = GEN_SORA_API_URL
+        request_data = {
+            'model': GEN_MODEL_TEXT2VIDEO,
+            'callbackUrl': GEN_CALLBACK_URL,
+            'input': {
+                'prompt': payload['prompt'],
+                'n_frames': f"{payload.get('duration', 5)}s",
+                'aspect_ratio': payload.get('aspect_ratio', 'landscape'),
+                'quality': payload.get('quality', 'standard')
+            }
+        }
+    elif kind == "image2video":
+        api_url = GEN_SORA_API_URL
+        request_data = {
+            'model': GEN_MODEL_IMAGE2VIDEO,
+            'callbackUrl': GEN_CALLBACK_URL,
+            'input': {
+                'image_url': payload['image_url'],
+                'prompt': payload.get('prompt', ''),
+                'n_frames': f"{payload.get('duration', 5)}s",
+                'aspect_ratio': payload.get('aspect_ratio', 'landscape')
+            }
+        }
+    elif kind == "storyboard":
+        api_url = GEN_SORA_API_URL
+        request_data = {
+            'model': GEN_MODEL_STORYBOARD,
+            'callbackUrl': GEN_CALLBACK_URL,
+            'input': {
+                'scenes': payload['scenes']
+            }
+        }
+    else:
+        raise ValueError(f"Unknown generation kind: {kind}")
+    
+    print(f"[DEBUG] Sending request to {api_url}: {json.dumps(request_data)}")
+    
+    req = urllib.request.Request(
+        api_url,
+        data=json.dumps(request_data).encode('utf-8'),
+        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {GEN_API_KEY}'}
+    )
+    
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            response_text = response.read().decode('utf-8')
+            print(f"[DEBUG] API response: {response_text}")
+            result = json.loads(response_text)
+            
+            if result.get('code') == 200 and result.get('data', {}).get('taskId'):
+                task_id = result['data']['taskId']
+                print(f"[DEBUG] Got taskId: {task_id}")
+                return task_id
+            else:
+                raise Exception(f"API returned error: {result}")
+    except Exception as e:
+        print(f"[ERROR] start_generation failed: {str(e)}")
+        raise
+
+def wait_for_result(task_id: str, max_attempts: int = 30, delay: float = 2.0) -> Dict[str, Any]:
+    """
+    Опросить API до получения результата
+    Возвращает: {"status": "success"|"failed"|"timeout", "image_url": "...", "video_url": "...", "raw": {...}}
+    """
+    print(f"[DEBUG] wait_for_result: task_id={task_id}, max_attempts={max_attempts}")
+    
+    status_url = f'https://api.kie.ai/api/v1/jobs/task/{task_id}'
+    
+    for attempt in range(max_attempts):
+        time.sleep(delay)
+        
+        status_req = urllib.request.Request(
+            status_url,
+            headers={'Authorization': f'Bearer {GEN_API_KEY}'}
+        )
+        
+        try:
+            with urllib.request.urlopen(status_req, timeout=10) as status_response:
+                status_text = status_response.read().decode('utf-8')
+                status_result = json.loads(status_text)
+                
+                print(f"[DEBUG] Poll attempt {attempt+1}/{max_attempts}: {status_result}")
+                
+                if status_result.get('code') == 200:
+                    data = status_result.get('data', {})
+                    task_status = data.get('status', '').lower()
+                    
+                    if task_status == 'completed' or task_status == 'success':
+                        image_url = data.get('url') or data.get('image_url') or data.get('output', {}).get('image_url')
+                        video_url = data.get('video_url') or data.get('output', {}).get('video_url')
+                        
+                        return {
+                            'status': 'success',
+                            'image_url': image_url,
+                            'video_url': video_url,
+                            'raw': data
+                        }
+                    elif task_status == 'failed' or task_status == 'error':
+                        error_msg = data.get('error') or data.get('message') or 'Unknown error'
+                        return {
+                            'status': 'failed',
+                            'error': error_msg,
+                            'raw': data
+                        }
+                    else:
+                        print(f"[DEBUG] Task {task_id} still processing: {task_status}")
+        except Exception as e:
+            print(f"[ERROR] Poll attempt {attempt+1} failed: {str(e)}")
+    
+    return {'status': 'timeout', 'error': 'Timeout waiting for result'}
 
 def send_telegram_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None):
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
@@ -319,6 +515,7 @@ def handle_create_preview(conn, chat_id: int, user_id: int):
             DO UPDATE SET state = 'waiting_preview_prompt', updated_at = CURRENT_TIMESTAMP
         """, (user_id,))
         conn.commit()
+        print(f"[DEBUG] Set user {user_id} state to waiting_preview_prompt")
     
     send_telegram_message(chat_id, f"🎨 <b>Создание превью</b>\n\nСтоимость: {PREVIEW_COST} кредитов\n\nОпишите кадр:")
 
@@ -413,76 +610,44 @@ def handle_preview_prompt(conn, chat_id: int, user_id: int, prompt: str):
         cur.execute("DELETE FROM t_p62125649_ai_video_bot.user_states WHERE user_id = %s", (user_id,))
         conn.commit()
     
-    send_telegram_message(chat_id, "⏳ Генерирую превью... Это займёт несколько секунд.")
+    wait_msg = send_telegram_message(chat_id, "⏳ Генерирую превью... Это займёт несколько секунд.")
+    wait_msg_id = wait_msg.get('result', {}).get('message_id') if wait_msg else None
     
     try:
-        print(f"[DEBUG] Sending request to {GEN_IMAGE_API_URL}")
-        request_data = {
-            'model': GEN_MODEL_IMAGE,
-            'prompt': prompt,
-            'api_key': GEN_API_KEY
-        }
+        api_task_id = start_generation("preview", {"prompt": prompt})
         
-        print(f"[DEBUG] Request data: {json.dumps(request_data)}")
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE t_p62125649_ai_video_bot.orders 
+                SET external_task_id = %s
+                WHERE task_id = %s
+            """, (api_task_id, task_id))
+            conn.commit()
         
-        req = urllib.request.Request(
-            GEN_IMAGE_API_URL,
-            data=json.dumps(request_data).encode('utf-8'),
-            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {GEN_API_KEY}'}
-        )
+        result = wait_for_result(api_task_id)
         
-        with urllib.request.urlopen(req, timeout=30) as response:
-            response_text = response.read().decode('utf-8')
-            print(f"[DEBUG] API response: {response_text}")
-            result = json.loads(response_text)
+        if result['status'] == 'success' and result.get('image_url'):
+            image_url = result['image_url']
             
-            if result.get('code') == 200 and result.get('data', {}).get('taskId'):
-                api_task_id = result['data']['taskId']
-                print(f"[DEBUG] Got taskId: {api_task_id}, will poll for result")
-                
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        UPDATE t_p62125649_ai_video_bot.orders 
-                        SET external_task_id = %s
-                        WHERE task_id = %s
-                    """, (api_task_id, task_id))
-                    conn.commit()
-                
-                import time
-                max_attempts = 30
-                for attempt in range(max_attempts):
-                    time.sleep(2)
-                    
-                    status_url = f'https://api.kie.ai/api/v1/jobs/task/{api_task_id}'
-                    status_req = urllib.request.Request(status_url, headers={'Authorization': f'Bearer {GEN_API_KEY}'})
-                    
-                    with urllib.request.urlopen(status_req, timeout=10) as status_response:
-                        status_text = status_response.read().decode('utf-8')
-                        status_result = json.loads(status_text)
-                        
-                        print(f"[DEBUG] Poll attempt {attempt+1}: {status_result}")
-                        
-                        if status_result.get('code') == 200:
-                            data = status_result.get('data', {})
-                            if data.get('status') == 'completed':
-                                image_url = data.get('url') or data.get('image_url') or data.get('output', {}).get('image_url')
-                                if image_url:
-                                    with conn.cursor() as cur:
-                                        cur.execute("""
-                                            UPDATE t_p62125649_ai_video_bot.orders 
-                                            SET status = 'completed', result_url = %s, completed_at = CURRENT_TIMESTAMP
-                                            WHERE task_id = %s
-                                        """, (image_url, task_id))
-                                        conn.commit()
-                                    
-                                    send_telegram_message(chat_id, f"✅ Ваше превью готово!\n\n{image_url}", main_menu_keyboard())
-                                    return
-                            elif data.get('status') == 'failed':
-                                raise Exception(f"Generation failed: {data.get('error', 'Unknown error')}")
-                
-                raise Exception("Timeout waiting for image generation")
-            else:
-                raise Exception(f"Invalid API response: {result}")
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE t_p62125649_ai_video_bot.orders 
+                    SET status = 'completed', result_url = %s, completed_at = CURRENT_TIMESTAMP
+                    WHERE task_id = %s
+                """, (image_url, task_id))
+                conn.commit()
+            
+            if wait_msg_id:
+                edit_telegram_message(chat_id, wait_msg_id, "✅ Превью готово!")
+            
+            send_telegram_photo(chat_id, image_url, "Ваш кадр", main_menu_keyboard())
+            print(f"[SUCCESS] Preview sent to user {user_id}: {image_url}")
+        
+        elif result['status'] == 'failed':
+            raise Exception(f"Generation failed: {result.get('error', 'Unknown error')}")
+        else:
+            raise Exception("Timeout waiting for image generation")
+            
     except Exception as e:
         print(f"[ERROR] Generation error: {str(e)}")
         import traceback
@@ -497,7 +662,10 @@ def handle_preview_prompt(conn, chat_id: int, user_id: int, prompt: str):
             cur.execute("UPDATE t_p62125649_ai_video_bot.users SET balance = balance + %s WHERE user_id = %s", (PREVIEW_COST, user_id))
             conn.commit()
         
-        send_telegram_message(chat_id, "❌ Ошибка генерации. Кредиты возвращены.", main_menu_keyboard())
+        if wait_msg_id:
+            edit_telegram_message(chat_id, wait_msg_id, "❌ Ошибка генерации. Кредиты возвращены.")
+        else:
+            send_telegram_message(chat_id, "❌ Ошибка генерации. Кредиты возвращены.", main_menu_keyboard())
 
 def handle_textvideo_prompt(conn, chat_id: int, user_id: int, prompt: str):
     with conn.cursor() as cur:
@@ -584,43 +752,51 @@ def handle_quality_selection(conn, chat_id: int, user_id: int, quality: str):
         cur.execute("DELETE FROM t_p62125649_ai_video_bot.user_states WHERE user_id = %s", (user_id,))
         conn.commit()
     
-    send_telegram_message(chat_id, f"⏳ Генерирую видео {duration}с ({quality})...")
+    wait_msg = send_telegram_message(chat_id, f"⏳ Генерирую видео {duration}с ({quality})... Это займёт 1-2 минуты.")
+    wait_msg_id = wait_msg.get('result', {}).get('message_id') if wait_msg else None
     
     try:
-        request_data = {
-            'model': GEN_MODEL_TEXT2VIDEO,
-            'callbackUrl': GEN_CALLBACK_URL,
-            'input': {
-                'prompt': prompt,
-                'n_frames': f'{duration}s',
-                'aspect_ratio': 'landscape',
-                'size': 'high' if quality == 'high' else 'standard'
-            }
-        }
+        api_task_id = start_generation("text2video", {
+            "prompt": prompt,
+            "duration": duration,
+            "quality": quality
+        })
         
-        req = urllib.request.Request(
-            GEN_SORA_API_URL,
-            data=json.dumps(request_data).encode('utf-8'),
-            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {GEN_API_KEY}'}
-        )
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE t_p62125649_ai_video_bot.orders 
+                SET external_task_id = %s
+                WHERE task_id = %s
+            """, (api_task_id, task_id))
+            conn.commit()
         
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode('utf-8'))
+        result = wait_for_result(api_task_id, max_attempts=60, delay=2.0)
+        
+        if result['status'] == 'success' and result.get('video_url'):
+            video_url = result['video_url']
             
-            task_id_from_api = result.get('data', {}).get('taskId') or result.get('job_id')
-            if task_id_from_api:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        UPDATE t_p62125649_ai_video_bot.orders 
-                        SET external_job_id = %s
-                        WHERE task_id = %s
-                    """, (task_id_from_api, task_id))
-                    conn.commit()
-                
-                send_telegram_message(chat_id, "✅ Заказ создан! Я пришлю видео, как только оно будет готово.", main_menu_keyboard())
-            else:
-                raise Exception("Invalid API response")
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE t_p62125649_ai_video_bot.orders 
+                    SET status = 'completed', result_url = %s, completed_at = CURRENT_TIMESTAMP
+                    WHERE task_id = %s
+                """, (video_url, task_id))
+                conn.commit()
+            
+            if wait_msg_id:
+                edit_telegram_message(chat_id, wait_msg_id, "✅ Видео готово!")
+            
+            send_telegram_video(chat_id, video_url, f"Ваше видео {duration}с", main_menu_keyboard())
+            print(f"[SUCCESS] Video sent to user {user_id}: {video_url}")
+        
+        elif result['status'] == 'failed':
+            raise Exception(f"Generation failed: {result.get('error', 'Unknown error')}")
+        else:
+            raise Exception("Timeout waiting for video generation")
+            
     except Exception as e:
+        print(f"[ERROR] Video generation error: {str(e)}")
+        
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE t_p62125649_ai_video_bot.orders 
@@ -630,7 +806,10 @@ def handle_quality_selection(conn, chat_id: int, user_id: int, quality: str):
             cur.execute("UPDATE t_p62125649_ai_video_bot.users SET balance = balance + %s WHERE user_id = %s", (cost, user_id))
             conn.commit()
         
-        send_telegram_message(chat_id, "❌ Ошибка генерации. Кредиты возвращены.", main_menu_keyboard())
+        if wait_msg_id:
+            edit_telegram_message(chat_id, wait_msg_id, "❌ Ошибка генерации. Кредиты возвращены.")
+        else:
+            send_telegram_message(chat_id, "❌ Ошибка генерации. Кредиты возвращены.", main_menu_keyboard())
 
 def get_telegram_file_url(file_id: str) -> str:
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/getFile'
