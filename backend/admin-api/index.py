@@ -86,6 +86,21 @@ def get_recent_orders(conn, limit: int = 20):
         """, (limit,))
         return [dict(o) for o in cur.fetchall()]
 
+def get_model_stats(conn):
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT 
+                order_type,
+                COUNT(*) as total_count,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_count,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                SUM(cost) as total_revenue
+            FROM t_p62125649_ai_video_bot.orders
+            GROUP BY order_type
+            ORDER BY total_count DESC
+        """)
+        return [dict(s) for s in cur.fetchall()]
+
 def get_order_stats(conn):
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("""
@@ -205,13 +220,15 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 recent_orders = get_recent_orders(conn, 20)
                 order_stats = get_order_stats(conn)
                 daily_revenue = get_daily_revenue(conn, 7)
+                model_stats = get_model_stats(conn)
                 
                 data = {
                     'stats': stats,
                     'recent_users': recent_users,
                     'recent_orders': recent_orders,
                     'order_stats': order_stats,
-                    'daily_revenue': daily_revenue
+                    'daily_revenue': daily_revenue,
+                    'model_stats': model_stats
                 }
             else:
                 data = {'error': 'Unknown endpoint'}

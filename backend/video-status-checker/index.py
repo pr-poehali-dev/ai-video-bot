@@ -14,9 +14,13 @@ import urllib.request
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 DATABASE_URL = os.environ.get('DATABASE_URL')
+GEN_API_KEY = os.environ.get('GEN_API_KEY', '57dabe651c81b31ea5ee1bb021817051')
+GEN_SORA_API_URL = os.environ.get('GEN_SORA_API_URL', 'https://api.kie.ai/api/v1/jobs/createTask')
+GEN_IMAGE_API_URL = os.environ.get('GEN_IMAGE_API_URL', 'https://api.kie.ai/api/v1/gpt4o-image/generate')
 
 MAX_RETRIES = 40
 TIMEOUT_HOURS = 2
+JOB_STATUS_URL = 'https://api.kie.ai/api/v1/jobs/getJobStatus'
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
@@ -46,12 +50,31 @@ def send_telegram_message(chat_id: int, text: str):
         return json.loads(response.read().decode('utf-8'))
 
 def check_order_status(order: Dict) -> Dict[str, Any]:
-    task_id = order['task_id']
+    external_job_id = order.get('external_job_id')
     order_type = order['order_type']
     
-    mock_url = f"https://example.com/{task_id}.jpg" if order_type == 'preview' else f"https://example.com/{task_id}.mp4"
+    if not external_job_id:
+        return {'status': 'processing', 'result_url': None, 'error': None}
     
-    return {'status': 'completed', 'result_url': mock_url, 'error': None}
+    try:
+        request_data = {'job_id': external_job_id, 'api_key': GEN_API_KEY}
+        req = urllib.request.Request(
+            JOB_STATUS_URL,
+            data=json.dumps(request_data).encode('utf-8'),
+            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {GEN_API_KEY}'}
+        )
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            
+            if result.get('status') == 'completed' and result.get('result_url'):
+                return {'status': 'completed', 'result_url': result['result_url'], 'error': None}
+            elif result.get('status') == 'failed':
+                return {'status': 'failed', 'result_url': None, 'error': result.get('error', 'Unknown error')}
+            else:
+                return {'status': 'processing', 'result_url': None, 'error': None}
+    except Exception as e:
+        return {'status': 'processing', 'result_url': None, 'error': None}
 
 def process_order(conn, order: Dict) -> str:
     order_id = order['order_id']

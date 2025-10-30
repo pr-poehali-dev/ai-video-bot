@@ -51,6 +51,13 @@ interface DashboardData {
     revenue: number;
     transaction_count: number;
   }>;
+  model_stats: Array<{
+    order_type: string;
+    total_count: number;
+    completed_count: number;
+    failed_count: number;
+    total_revenue: number;
+  }>;
 }
 
 export default function Index() {
@@ -544,6 +551,49 @@ export default function Index() {
           </TabsContent>
 
           <TabsContent value="analytics" className="space-y-4">
+            <Card className="mb-4">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Icon name="Sparkles" size={24} />
+                  Статистика по AI моделям
+                </CardTitle>
+                <CardDescription>Использование генераторов изображений и видео</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {data.model_stats && data.model_stats.length > 0 ? (
+                    data.model_stats.map((model) => (
+                      <Card key={model.order_type} className="bg-gradient-to-br from-purple-50 to-pink-50">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-center justify-between">
+                            <Icon name={getOrderTypeIcon(model.order_type)} className="text-primary" size={28} />
+                            <Badge variant="outline">{model.total_count}</Badge>
+                          </div>
+                          <CardTitle className="text-lg">{getOrderTypeLabel(model.order_type)}</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-2 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Успешно:</span>
+                            <span className="font-medium text-green-600">{model.completed_count}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Ошибки:</span>
+                            <span className="font-medium text-red-600">{model.failed_count}</span>
+                          </div>
+                          <div className="flex justify-between pt-2 border-t">
+                            <span className="text-muted-foreground">Выручка:</span>
+                            <span className="font-bold text-primary">{model.total_revenue}₽</span>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))
+                  ) : (
+                    <p className="col-span-4 text-center text-muted-foreground py-8">Статистика пока недоступна</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <Card>
                 <CardHeader>

@@ -14,9 +14,13 @@ import urllib.request
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 DATABASE_URL = os.environ.get('DATABASE_URL')
-IMAGE_API_URL = os.environ.get('IMAGE_API_URL', '')
-VIDEO_API_URL = os.environ.get('VIDEO_API_URL', '')
-STORYBOARD_API_URL = os.environ.get('STORYBOARD_API_URL', '')
+GEN_API_KEY = os.environ.get('GEN_API_KEY', '57dabe651c81b31ea5ee1bb021817051')
+GEN_SORA_API_URL = os.environ.get('GEN_SORA_API_URL', 'https://api.kie.ai/api/v1/jobs/createTask')
+GEN_IMAGE_API_URL = os.environ.get('GEN_IMAGE_API_URL', 'https://api.kie.ai/api/v1/gpt4o-image/generate')
+GEN_MODEL_TEXT2VIDEO = os.environ.get('GEN_MODEL_TEXT2VIDEO', 'sora-2-pro-text-to-video')
+GEN_MODEL_IMAGE2VIDEO = os.environ.get('GEN_MODEL_IMAGE2VIDEO', 'sora-2-pro-image-to-video')
+GEN_MODEL_STORYBOARD = os.environ.get('GEN_MODEL_STORYBOARD', 'sora-2-pro-storyboard')
+GEN_MODEL_IMAGE = os.environ.get('GEN_MODEL_IMAGE', '4o-image-api')
 TELEGRAM_PAYMENT_PROVIDER_TOKEN = os.environ.get('TELEGRAM_PAYMENT_PROVIDER_TOKEN', '')
 TELEGRAM_STARS_ENABLED = os.environ.get('TELEGRAM_STARS_ENABLED', 'true').lower() == 'true'
 
@@ -352,6 +356,46 @@ def handle_preview_prompt(conn, chat_id: int, user_id: int, prompt: str):
         conn.commit()
     
     send_telegram_message(chat_id, "⏳ Генерирую превью... Это займёт несколько секунд.")
+    
+    try:
+        request_data = {
+            'model': GEN_MODEL_IMAGE,
+            'prompt': prompt,
+            'api_key': GEN_API_KEY
+        }
+        
+        req = urllib.request.Request(
+            GEN_IMAGE_API_URL,
+            data=json.dumps(request_data).encode('utf-8'),
+            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {GEN_API_KEY}'}
+        )
+        
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            
+            if result.get('status') == 'success' and result.get('image_url'):
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE t_p62125649_ai_video_bot.orders 
+                        SET status = 'completed', result_url = %s, completed_at = CURRENT_TIMESTAMP
+                        WHERE task_id = %s
+                    """, (result['image_url'], task_id))
+                    conn.commit()
+                
+                send_telegram_message(chat_id, f"✅ Ваше превью готово!\n\n{result['image_url']}", main_menu_keyboard())
+            else:
+                raise Exception("Invalid API response")
+    except Exception as e:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE t_p62125649_ai_video_bot.orders 
+                SET status = 'failed', error_message = %s
+                WHERE task_id = %s
+            """, (str(e), task_id))
+            cur.execute("UPDATE t_p62125649_ai_video_bot.users SET balance = balance + %s WHERE user_id = %s", (PREVIEW_COST, user_id))
+            conn.commit()
+        
+        send_telegram_message(chat_id, "❌ Ошибка генерации. Кредиты возвращены.", main_menu_keyboard())
 
 def handle_textvideo_prompt(conn, chat_id: int, user_id: int, prompt: str):
     with conn.cursor() as cur:
@@ -439,6 +483,48 @@ def handle_quality_selection(conn, chat_id: int, user_id: int, quality: str):
         conn.commit()
     
     send_telegram_message(chat_id, f"⏳ Генерирую видео {duration}с ({quality})...")
+    
+    try:
+        request_data = {
+            'model': GEN_MODEL_TEXT2VIDEO,
+            'prompt': prompt,
+            'duration': duration,
+            'quality': quality,
+            'api_key': GEN_API_KEY
+        }
+        
+        req = urllib.request.Request(
+            GEN_SORA_API_URL,
+            data=json.dumps(request_data).encode('utf-8'),
+            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {GEN_API_KEY}'}
+        )
+        
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            
+            if result.get('job_id'):
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE t_p62125649_ai_video_bot.orders 
+                        SET external_job_id = %s
+                        WHERE task_id = %s
+                    """, (result['job_id'], task_id))
+                    conn.commit()
+                
+                send_telegram_message(chat_id, "⏳ Видео в обработке. Уведомим когда будет готово.", main_menu_keyboard())
+            else:
+                raise Exception("Invalid API response")
+    except Exception as e:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE t_p62125649_ai_video_bot.orders 
+                SET status = 'failed', error_message = %s
+                WHERE task_id = %s
+            """, (str(e), task_id))
+            cur.execute("UPDATE t_p62125649_ai_video_bot.users SET balance = balance + %s WHERE user_id = %s", (cost, user_id))
+            conn.commit()
+        
+        send_telegram_message(chat_id, "❌ Ошибка генерации. Кредиты возвращены.", main_menu_keyboard())
 
 def handle_callback_query(conn, callback_query: Dict):
     callback_id = callback_query['id']
