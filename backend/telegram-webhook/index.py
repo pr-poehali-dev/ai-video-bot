@@ -899,12 +899,18 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     
     try:
         body = json.loads(event.get('body', '{}'))
+        print(f"[DEBUG] Received update: {json.dumps(body)}")
+        
         conn = get_db_connection()
         
         if 'message' in body:
+            print(f"[DEBUG] Processing message from user {body['message']['from']['id']}")
             handle_message(conn, body['message'])
         elif 'callback_query' in body:
+            print(f"[DEBUG] Processing callback_query: {body['callback_query'].get('data')}")
             handle_callback_query(conn, body['callback_query'])
+        else:
+            print(f"[DEBUG] Unknown update type: {list(body.keys())}")
         
         conn.close()
         
@@ -916,6 +922,9 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         }
         
     except Exception as e:
+        print(f"[ERROR] Exception in handler: {str(e)}")
+        import traceback
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json'},
